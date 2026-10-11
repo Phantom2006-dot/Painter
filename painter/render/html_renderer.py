@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from ..geometry import mm_to_pt
+from ..typography import _measure_text
 from ..schemas import (
     Alignment,
     DocumentIR,
@@ -139,6 +140,32 @@ def _position_css(
     )
 
 
+def _fit_line_size(
+    text: str,
+    font_size_pt: float,
+    box_width_px: float,
+    family: str,
+    dpi: float,
+) -> float:
+    """Shrink a line's font size until the text fits the box it was measured in.
+
+    The reconstruction substitutes an installed font for the original one, and a
+    wider substitute makes long lines run past the page edge and get clipped.
+    Measuring the real glyphs and scaling only the lines that overflow keeps the
+    text on the page without shrinking lines that already fit.
+    """
+    if not text or box_width_px <= 1 or not dpi:
+        return font_size_pt
+    size_px = max(4, int(round(font_size_pt / 72.0 * dpi)))
+    measured = _measure_text(family, size_px, text)
+    if not measured or measured[0] <= 0:
+        return font_size_pt
+    width_px = measured[0]
+    if width_px <= box_width_px * 1.02:
+        return font_size_pt
+    return max(font_size_pt * 0.6, font_size_pt * box_width_px / width_px)
+
+
 def _render_text_lines(
     element: Element,
     page: PageIR,
@@ -162,15 +189,21 @@ def _render_text_lines(
     x2 = max(line.bbox.x2 for line in lines)
     y2 = max(line.bbox.y2 for line in lines)
     offset_x, offset_y = options.global_offset_mm
-    typography_css = _typography_css(element.typography, overrides, options.font_scale)
+    base_size = (element.typography.font_size_pt if element.typography else None) or 11.0
+    family = (element.typography.font_family if element.typography else None) or "DejaVu Sans"
+    dpi = float(getattr(page, "dpi", 0.0) or 0.0)
     parts: list[str] = []
     for line in lines:
         left = (line.bbox.x1 - x1) * mm_x
         top = (line.bbox.y1 - y1) * mm_y
         width = max(line.bbox.width * mm_x, 0.4)
+        fitted = _fit_line_size(line.text, float(base_size), line.bbox.width, family, dpi)
+        line_css = _typography_css(
+            element.typography, {**overrides, "font_size_pt": round(fitted, 2)}, options.font_scale
+        )
         parts.append(
             f'<div style="position:absolute;left:{round(left, 3)}mm;top:{round(top, 3)}mm;'
-            f'width:{round(width, 3)}mm;{typography_css};line-height:1.05;'
+            f'width:{round(width, 3)}mm;{line_css};line-height:1.05;'
             f'white-space:nowrap;">{_escape(line.text)}</div>'
         )
     return (
