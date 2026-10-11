@@ -243,6 +243,128 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 0
 
 
+CLASS_ORDER = [
+    "Caption",
+    "Footnote",
+    "Formula",
+    "List-item",
+    "Page-footer",
+    "Page-header",
+    "Picture",
+    "Section-header",
+    "Table",
+    "Text",
+    "Title",
+]
+
+#: IR element types mapped onto the layout classes the detector is trained on.
+TYPE_TO_CLASS = {
+    "figure_caption": "Caption",
+    "table_caption": "Caption",
+    "footnote": "Footnote",
+    "formula": "Formula",
+    "list": "List-item",
+    "footer": "Page-footer",
+    "header": "Page-header",
+    "image": "Picture",
+    "logo": "Picture",
+    "subheading": "Section-header",
+    "heading": "Section-header",
+    "table": "Table",
+    "paragraph": "Text",
+    "text_block": "Text",
+    "title": "Title",
+}
+
+
+def cmd_training_data(args: argparse.Namespace) -> int:
+    """Export reconstructed documents as layout-detection training data.
+
+    The point is the feedback loop: correct an element in the web UI, and the
+    corrected document becomes a labelled example for the next training run.
+    ``--only-corrected`` exports just the documents a human touched.
+    """
+    import csv
+    import shutil
+
+    from .config import load_settings
+    from .schemas import DocumentIR
+    from .storage import Repository
+
+    settings = load_settings()
+    repository = Repository(settings.db_path)
+    output = Path(args.out)
+    (output / "images").mkdir(parents=True, exist_ok=True)
+    (output / "labels").mkdir(parents=True, exist_ok=True)
+
+    exported: list[dict[str, object]] = []
+    for record in repository.list_documents(limit=args.limit):
+        document_id = record["document_id"]
+        payload = repository.latest_ir(document_id)
+        if payload is None:
+            continue
+        try:
+            document = DocumentIR.model_validate(payload)
+        except Exception:  # noqa: BLE001 - an unreadable IR is simply skipped
+            continue
+        # a hand correction is recorded per element, so the document counts as
+        # corrected when any element carries an edit record
+        corrected = any(
+            element.edits for page in document.pages for element in page.elements
+        )
+        if args.only_corrected and not corrected:
+            continue
+        for page in document.pages:
+            for element in page.elements:
+                class_name = TYPE_TO_CLASS.get(element.type.value)
+                if class_name is None:
+                    continue
+                stem = f"{document_id}_p{page.index:02d}_{class_name.lower()}"
+                image_source = settings.data_dir / "documents" / document_id / "pages" / f"page_{page.index:02d}.png"
+                if not image_source.is_file():
+                    continue
+                image_target = output / "images" / f"{document_id}_page{page.index:02d}.png"
+                if not image_target.is_file():
+                    shutil.copyfile(image_source, image_target)
+                label_path = output / "labels" / f"{document_id}_page{page.index:02d}.txt"
+                box = element.bbox
+                width = float(page.width_px) or 1.0
+                height = float(page.height_px) or 1.0
+                centre_x = (box.x1 + box.x2) / 2 / width
+                centre_y = (box.y1 + box.y2) / 2 / height
+                line = (
+                    f"{CLASS_ORDER.index(class_name)} {centre_x:.6f} {centre_y:.6f} "
+                    f"{box.width / width:.6f} {box.height / height:.6f}"
+                )
+                with label_path.open("a") as handle:
+                    handle.write(line + "\n")
+                exported.append(
+                    {
+                        "document_id": document_id,
+                        "page": page.index,
+                        "element_id": element.id,
+                        "class": class_name,
+                        "corrected": corrected,
+                        "stem": stem,
+                    }
+                )
+
+    manifest = output / "manifest.csv"
+    with manifest.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["document_id", "page", "element_id", "class", "corrected", "stem"])
+        writer.writeheader()
+        writer.writerows(exported)
+
+    corrected_count = sum(1 for row in exported if row["corrected"])
+    print(f"exported {len(exported)} regions from {len({row['document_id'] for row in exported})} document(s)")
+    print(f"  {corrected_count} from hand-corrected documents")
+    print(f"  images -> {output / 'images'}")
+    print(f"  labels -> {output / 'labels'}")
+    print(f"  manifest -> {manifest}")
+    print("Train with: python3 tools/train_layout.py --data <dataset>/data.yaml")
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -334,6 +456,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("selftest", help="generate a synthetic page and run the pipeline")
     p.add_argument("--data-dir", action="store_true", help="reserved for compatibility")
     p.set_defaults(func=cmd_selftest)
+
+    p = sub.add_parser("training-data", help="export corrected documents as layout training data")
+    p.add_argument("--out", default="data/training_export", help="destination directory")
+    p.add_argument("--limit", type=int, default=500)
+    p.add_argument("--only-corrected", action="store_true", help="export only hand-corrected documents")
+    p.set_defaults(func=cmd_training_data)
 
     p = sub.add_parser("benchmark", help="run the synthetic benchmark set")
     p.add_argument("--cases", type=int, default=6)
