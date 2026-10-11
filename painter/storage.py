@@ -631,6 +631,23 @@ class Repository:
         return result
 
 
+def remove_document_files(documents_dir: Path, document_id: str) -> bool:
+    """Delete a document's workspace from disk, returning whether it existed.
+
+    ``Repository.delete_document`` only clears database rows, so deleting a
+    document used to leave its pages, crops, renders and exports on disk — 640MB
+    of them on a single test machine. Deleting a document has to mean deleting
+    its files.
+    """
+    import shutil
+
+    workspace = Path(documents_dir) / document_id
+    if not workspace.is_dir():
+        return False
+    shutil.rmtree(workspace, ignore_errors=True)
+    return True
+
+
 def cleanup_workspaces(
     documents_dir: Path, repository: Repository, keep_days: int = 30, dry_run: bool = False
 ) -> list[str]:

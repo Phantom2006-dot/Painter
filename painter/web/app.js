@@ -102,12 +102,55 @@ async function refreshDocuments() {
     item.className = doc.document_id === state.documentId ? "active" : "";
     item.innerHTML = `<span>${doc.filename}</span><span class="muted">${doc.status}</span>`;
     item.onclick = () => selectDocument(doc.document_id);
+    const remove = document.createElement("button");
+    remove.className = "ghost small";
+    remove.textContent = "remove";
+    remove.title = "delete this document";
+    remove.onclick = async (event) => {
+      event.stopPropagation();
+      if (!window.confirm(`Delete ${doc.filename}? This removes its files and exports.`)) return;
+      try {
+        await api(`/api/documents/${doc.document_id}`, { method: "DELETE" });
+        if (state.documentId === doc.document_id) {
+          state.documentId = null;
+          state.processed = false;
+        }
+        await refreshDocuments();
+        await loadDocument();
+      } catch (error) {
+        window.alert(`Could not delete: ${error.message}`);
+      }
+    };
+    item.appendChild(remove);
     list.appendChild(item);
   });
   if (!state.documents.length) {
     list.innerHTML = '<li class="muted">no documents yet</li>';
   }
 }
+
+async function clearAllDocuments() {
+  const status = el("clearStatus");
+  const count = state.documents.length;
+  if (!count) {
+    status.textContent = "nothing to clear";
+    return;
+  }
+  if (!window.confirm(`Delete all ${count} documents, their files and their exports?`)) return;
+  status.textContent = "clearing…";
+  try {
+    const result = await api("/api/documents", { method: "DELETE" });
+    state.documentId = null;
+    state.processed = false;
+    state.selected = null;
+    await refreshDocuments();
+    await loadDocument();
+    status.textContent = `removed ${result.removed} document(s)`;
+  } catch (error) {
+    status.textContent = `could not clear: ${error.message}`;
+  }
+}
+
 
 async function selectDocument(documentId) {
   state.documentId = documentId;
@@ -486,6 +529,7 @@ function wire() {
   });
 
   el("processBtn").onclick = startProcessing;
+  el("clearDocuments").onclick = clearAllDocuments;
   el("saveSerpApi").onclick = saveSerpApi;
   el("verifySerpApi").onclick = verifySerpApi;
   el("clearSerpApi").onclick = clearSerpApi;

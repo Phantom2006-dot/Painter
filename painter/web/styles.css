@@ -167,5 +167,9 @@ label.check { flex-direction: row; align-items: center; gap: 8px; }
 .card.settings code { background: rgba(0,0,0,.06); padding: 0 3px; border-radius: 3px; }
 .card.settings .buttons { display: flex; gap: 8px; margin: 10px 0 6px; }
 .card.settings button.ghost { background: transparent; border: 1px solid var(--border, #d0d4da); color: inherit; }
+.card button.ghost { background: transparent; border: 1px solid var(--border, #d0d4da); color: inherit; cursor: pointer; }
+.card button.ghost.small { font-size: 11px; padding: 1px 6px; margin-left: 8px; opacity: 0.75; }
+.card button.ghost.small:hover { opacity: 1; }
+#documentList li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .status.ok { color: #15803d; }
 .status.bad { color: #b91c1c; }

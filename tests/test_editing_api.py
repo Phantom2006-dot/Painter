@@ -156,6 +156,66 @@ def client(settings):
     app.state.jobs.shutdown()
 
 
+def _make_document(settings, name: str):
+    """Register a minimal document the way the upload route does."""
+    import hashlib
+
+    from painter.storage import DocumentWorkspace, Repository, utcnow
+
+    repository = Repository(settings.db_path)
+    document_id = f"doc_test_{name.replace('.', '_')}"
+    workspace = DocumentWorkspace(root=settings.documents_dir / document_id, document_id=document_id)
+    workspace.ensure()
+    payload = b"not really an image"
+    source = workspace.path("source", "original.png")
+    source.write_bytes(payload)
+    repository.create_document(
+        document_id=document_id,
+        filename=name,
+        stored_path=str(source),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        content_type="image/png",
+        size_bytes=len(payload),
+    )
+    return repository, workspace
+
+
+def test_api_clear_documents_empties_the_list(client, settings):
+    """Clearing must remove every document, and a second clear must be a no-op."""
+    repository, _ = _make_document(settings, "one.png")
+    _make_document(settings, "two.png")
+    assert len(repository.list_documents(limit=100)) >= 2
+
+    from painter.storage import DocumentWorkspace
+
+    workspace = DocumentWorkspace(
+        root=settings.documents_dir / "doc_test_one_png", document_id="doc_test_one_png"
+    )
+    assert workspace.root.is_dir(), "the workspace should exist before clearing"
+
+    response = client.delete("/api/documents")
+    assert response.status_code == 200
+    assert response.json()["removed"] >= 2
+    assert repository.list_documents(limit=100) == []
+    assert not workspace.root.exists(), "clearing must delete the files, not just the rows"
+
+    again = client.delete("/api/documents")
+    assert again.status_code == 200
+    assert again.json()["removed"] == 0
+
+
+def test_api_delete_single_document(client, settings):
+    """Deleting one document must leave the others alone."""
+    repository, keep = _make_document(settings, "keep.png")
+    _, drop = _make_document(settings, "drop.png")
+
+    assert client.delete(f"/api/documents/{drop.document_id}").status_code == 200
+    remaining = [d["document_id"] for d in repository.list_documents(limit=100)]
+    assert drop.document_id not in remaining
+    assert keep.document_id in remaining
+    assert not drop.root.exists(), "the deleted document's files should be gone too"
+
+
 def test_api_health_and_capabilities(client):
     assert client.get("/api/health").json()["status"] == "ok"
     capabilities = client.get("/api/capabilities").json()

@@ -43,7 +43,7 @@ from .settings_store import (
     validate_api_key,
     verify_api_key,
 )
-from .storage import Repository, cleanup_workspaces
+from .storage import Repository, cleanup_workspaces, remove_document_files
 
 logger = get_logger("api")
 
@@ -387,8 +387,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "warnings": document.warnings if document else [],
         }
 
+    @app.delete("/api/documents", dependencies=guarded)
+    def clear_documents() -> dict[str, Any]:
+        """Remove every document, its files and its exports.
+
+        Uploading a new file is easier when the list can be emptied first, and
+        the only other way was to delete records one at a time.
+        """
+        documents = repository.list_documents(limit=1000)
+        removed: list[str] = []
+        failures: list[str] = []
+        for document in documents:
+            document_id = document.get("document_id")
+            if not document_id:
+                continue
+            try:
+                repository.delete_document(document_id)
+                remove_document_files(settings.documents_dir, document_id)
+                removed.append(document_id)
+            except Exception as exc:  # keep going: one bad record must not block the rest
+                failures.append(f"{document_id}: {exc}")
+        logger.info("cleared documents", extra={"removed": len(removed), "failed": len(failures)})
+        return {"removed": len(removed), "document_ids": removed, "failures": failures}
+
     @app.delete("/api/documents/{document_id}", dependencies=guarded)
-    def delete_document(document_id: str) -> dict[str, Any]:
+    def delete_document(document_id: str) -> dict[str, Any]:  # noqa: F811 - route body follows
         workspace = workspace_for(document_id)
         repository.delete_document(document_id)
         shutil.rmtree(workspace.root, ignore_errors=True)
