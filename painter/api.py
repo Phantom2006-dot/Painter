@@ -330,6 +330,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # -- inspection ------------------------------------------------------
     @app.get("/api/documents/{document_id}/ir", dependencies=guarded)
     def get_ir(document_id: str) -> Any:
+        # distinguish "no such document" (404) from "not processed yet" (409)
+        repository.get_document(document_id)
         payload = repository.latest_ir(document_id)
         if payload is None:
             raise HTTPException(status_code=409, detail="document has not been processed yet")
