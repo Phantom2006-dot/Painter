@@ -480,6 +480,167 @@ class DetectionBundle:
         }
 
 
+def complete_text_regions(
+    image: np.ndarray,
+    detections: Sequence["Detection"],
+    settings: Settings | None = None,
+) -> tuple[list["Detection"], list[str]]:
+    """Widen text detections that only cover part of their line.
+
+    Layout models sometimes return a fragment of a text line — the middle of a
+    sentence rather than the whole line. OCR then only sees the fragment, so
+    words silently disappear from the reconstruction. For every text-like
+    detection this measures the ink in its own row band across the page and
+    grows the box to the contiguous ink run that contains it, stopping at a gap
+    wider than a word space so neighbouring columns are not swallowed.
+    """
+    if not detections:
+        return list(detections), []
+    cv2 = _cv2()
+    gray = to_gray(image)
+    binary = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 25, 12
+    )
+    height, width = gray.shape[:2]
+    warnings: list[str] = []
+    completed: list["Detection"] = []
+    widened = 0
+    for detection in detections:
+        box = detection.bbox
+        if _detection_kind(detection) != "text":
+            completed.append(detection)
+            continue
+        y1 = max(0, int(box.y1) - 1)
+        y2 = min(height, int(box.y2) + 2)
+        if y2 - y1 < 3 or box.width < 3:
+            completed.append(detection)
+            continue
+        band = binary[y1:y2, :]
+        column_ink = (band > 0).sum(axis=0)
+        # a word space is small; a column gutter or a margin is much wider
+        gap_px = max(10, int(1.1 * (y2 - y1)))
+        centre = int((box.x1 + box.x2) / 2)
+        if column_ink[centre] == 0:
+            window = column_ink[max(0, centre - 20) : centre + 20]
+            if window.size == 0 or not window.any():
+                completed.append(detection)
+                continue
+            centre = max(0, centre - 20) + int(window.argmax())
+        left = centre
+        gap = 0
+        while left > 0:
+            if column_ink[left - 1] > 0:
+                gap = 0
+            else:
+                gap += 1
+                if gap > gap_px:
+                    break
+            left -= 1
+        right = centre
+        gap = 0
+        while right < width - 1:
+            if column_ink[right + 1] > 0:
+                gap = 0
+            else:
+                gap += 1
+                if gap > gap_px:
+                    break
+            right += 1
+        if right <= left:
+            completed.append(detection)
+            continue
+        new_x1 = float(min(box.x1, left))
+        new_x2 = float(max(box.x2, right))
+        # only accept a meaningful, page-bounded extension
+        if new_x2 - new_x1 <= box.width + 1 or new_x2 - new_x1 > width:
+            completed.append(detection)
+            continue
+        detection.bbox = BBox(x1=new_x1, y1=box.y1, x2=new_x2, y2=box.y2)
+        detection.extra["widened_from"] = [round(box.x1, 1), round(box.x2, 1)]
+        widened += 1
+        completed.append(detection)
+    if widened:
+        warnings.append(
+            f"{widened} text region(s) covered only part of their line and were widened to the full ink extent"
+        )
+    return completed, warnings
+
+
+def recover_missing_text_lines(
+    image: np.ndarray,
+    detections: Sequence["Detection"],
+    settings: Settings | None = None,
+) -> tuple[list["Detection"], list[str]]:
+    """Add text regions for lines the detector missed entirely.
+
+    Layout models miss lines: on one real email screenshot two full sentences
+    were never detected, so they vanished from the reconstruction. This scans
+    the ink rows that no detection covers and turns text-like bands into
+    paragraph detections, which the OCR stage then reads like any other region.
+    """
+    cv2 = _cv2()
+    gray = to_gray(image)
+    binary = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 25, 12
+    )
+    height, width = gray.shape[:2]
+    if height < 20 or width < 20:
+        return list(detections), []
+
+    covered = np.zeros(height, dtype=bool)
+    for detection in detections:
+        y1 = max(0, int(detection.bbox.y1) - 1)
+        y2 = min(height, int(detection.bbox.y2) + 2)
+        covered[y1:y2] = True
+
+    row_ink = (binary > 0).sum(axis=1)
+    min_line_px = max(6, int(height * 0.004))
+    max_line_px = max(20, int(height * 0.06))
+    min_width_px = max(30, int(width * 0.12))
+    recovered: list["Detection"] = []
+    run_start: int | None = None
+    for y in range(height + 1):
+        has_ink = y < height and row_ink[y] > 0 and not covered[y]
+        if has_ink and run_start is None:
+            run_start = y
+        elif not has_ink and run_start is not None:
+            y1, y2 = run_start, y
+            run_start = None
+            band_height = y2 - y1
+            if band_height < min_line_px or band_height > max_line_px:
+                continue
+            band = binary[y1:y2, :]
+            column_ink = (band > 0).sum(axis=0)
+            columns = np.nonzero(column_ink)[0]
+            if columns.size == 0:
+                continue
+            x1, x2 = int(columns[0]), int(columns[-1]) + 1
+            if x2 - x1 < min_width_px:
+                continue
+            area = float(band_height * (x2 - x1))
+            fill = float((band > 0).sum()) / area if area else 0.0
+            # text has a low fill ratio; logos and rules are much denser
+            if fill > 0.45:
+                continue
+            recovered.append(
+                Detection(
+                    class_name="Text",
+                    element_type=ElementType.PARAGRAPH,
+                    confidence=0.3,
+                    bbox=BBox(x1=float(x1), y1=float(y1), x2=float(x2), y2=float(y2)),
+                    source="cv-recovery",
+                    extra={"recovered": True},
+                )
+            )
+    if not recovered:
+        return list(detections), []
+    warnings = [
+        f"{len(recovered)} text line(s) were missed by the layout model and recovered "
+        "from the page ink; they are marked for review"
+    ]
+    return list(detections) + recovered, warnings
+
+
 def _detection_kind(detection: "Detection") -> str:
     """Coarse grouping used when merging overlapping detections."""
     if detection.element_type in {
@@ -673,6 +834,12 @@ class LayoutDetectorService:
             detections, image.shape[1], image.shape[0], self.settings
         )
         warnings.extend(extra_warnings)
+        # a detection that covers only part of a line would silently truncate text
+        cleaned, complete_warnings = complete_text_regions(image, cleaned, self.settings)
+        warnings.extend(complete_warnings)
+        # and a line the model missed entirely would disappear from the result
+        cleaned, recovery_warnings = recover_missing_text_lines(image, cleaned, self.settings)
+        warnings.extend(recovery_warnings)
         return DetectionBundle(
             detections=cleaned,
             detector=detector_name,

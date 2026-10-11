@@ -100,9 +100,37 @@ def infer_page_format(
         return abs(ratio - target) / target
 
     family = min(families, key=family_delta)
-    if family_delta(family) > 0.08:
+    unmatched = family_delta(family) > 0.08
+    if unmatched:
         notes.append(
             f"aspect ratio {ratio:.3f} matches no standard format closely; assuming the {family} family"
+        )
+    if unmatched and line_height_px and line_height_px > 2:
+        # Nothing paper-shaped fits: this is a screenshot or a wide digital
+        # document. Forcing a paper size would shrink the text to an unreadable
+        # size (a 2.2 aspect ratio on A6 gives ~5pt body text), so keep the
+        # content's own proportions and choose the scale that puts body text at
+        # a normal reading size.
+        dpi = line_height_px / (ASSUMED_LINE_SPACING * TYPICAL_BODY_PT) * PT_PER_INCH
+        # a small margin keeps the widest line from being clipped at the edge
+        margin_mm = max(4.0, width_px * MM_PER_INCH / dpi * 0.04)
+        width_mm = width_px * MM_PER_INCH / dpi + margin_mm
+        height_mm = height_px * MM_PER_INCH / dpi + margin_mm
+        notes.append(
+            f"no standard page matches aspect {ratio:.3f}; using a custom "
+            f"{width_mm:.0f}x{height_mm:.0f}mm page so body text stays near {TYPICAL_BODY_PT:.0f}pt"
+        )
+        notes.append(f"effective resolution {dpi:.0f} dpi (estimated, not read from metadata)")
+        return (
+            PageFormat(
+                name="custom",
+                width_mm=round(width_mm, 1),
+                height_mm=round(height_mm, 1),
+                estimated=True,
+                notes=notes,
+            ),
+            round(dpi, 1),
+            notes,
         )
 
     def dpi_for(name: str) -> float:

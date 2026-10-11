@@ -25,6 +25,11 @@ from .schemas import Alignment, BBox, Element, ElementType, PageIR, Typography
 
 logger = get_logger("typography")
 
+#: Plausible range for body text. Estimates outside this range are measurement
+#: artefacts rather than real typography.
+MIN_FONT_PT = 4.0
+MAX_FONT_PT = 40.0
+
 #: Candidate families, in rough order of likelihood for office documents.
 CANDIDATE_FAMILIES = [
     "DejaVu Sans",
@@ -298,6 +303,11 @@ def estimate_typography(
     paragraph_spacing_pt = None
     if element.metadata.get("gap_below"):
         paragraph_spacing_pt = round(float(element.metadata["gap_below"]) * 72.0 / dpi, 2)
+
+    # guard against implausible estimates: a stray measurement must never turn
+    # body text into a headline or a smudge into unreadable 2pt type
+    size_pt = round(min(MAX_FONT_PT, max(MIN_FONT_PT, float(size_pt))), 2)
+    line_height_pt = round(min(MAX_FONT_PT * 2.0, max(MIN_FONT_PT, float(line_height_pt))), 2)
 
     typography = Typography(
         font_family=family_guess,

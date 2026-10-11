@@ -60,14 +60,31 @@ def _asset_href(path: str | None, options: HtmlRenderOptions) -> str:
     return path
 
 
+def _page_body_size(page: PageIR) -> float:
+    """The page's dominant body text size, used when an element has none."""
+    sizes = sorted(
+        float(element.typography.font_size_pt)
+        for element in page.elements
+        if element.typography and element.typography.font_size_pt
+    )
+    if not sizes:
+        return 11.0
+    return sizes[len(sizes) // 2]
+
+
 def _typography_css(
     typography: Typography | None,
     overrides: dict[str, Any] | None = None,
     font_scale: float = 1.0,
+    default_size_pt: float = 11.0,
 ) -> str:
     overrides = overrides or {}
     declarations: dict[str, str] = {}
-    size_pt = overrides.get("font_size_pt") or (typography.font_size_pt if typography else None) or 11.0
+    size_pt = (
+        overrides.get("font_size_pt")
+        or (typography.font_size_pt if typography else None)
+        or default_size_pt
+    )
     declarations["font-size"] = f"{round(float(size_pt) * max(0.5, min(2.0, font_scale)), 2)}pt"
     family = overrides.get("font_family") or (typography.font_family if typography else None)
     declarations["font-family"] = f"'{family}', {DEFAULT_FONT_STACK}" if family else DEFAULT_FONT_STACK
@@ -122,15 +139,61 @@ def _position_css(
     )
 
 
+def _render_text_lines(
+    element: Element,
+    page: PageIR,
+    options: HtmlRenderOptions,
+    overrides: dict[str, Any],
+    data_id: str,
+) -> str | None:
+    """Place every measured text line at its own position.
+
+    A single block with one line-height drifts on dense pages: the paragraph's
+    lines end up spread over a taller box than the original and collide with the
+    element below. OCR already gives us each line's box, so use it.
+    """
+    lines = [line for line in (element.lines or []) if (line.text or "").strip()]
+    if not lines:
+        return None
+    mm_x = page.mm_per_px_x
+    mm_y = page.mm_per_px_y
+    x1 = min(line.bbox.x1 for line in lines)
+    y1 = min(line.bbox.y1 for line in lines)
+    x2 = max(line.bbox.x2 for line in lines)
+    y2 = max(line.bbox.y2 for line in lines)
+    offset_x, offset_y = options.global_offset_mm
+    typography_css = _typography_css(element.typography, overrides, options.font_scale)
+    parts: list[str] = []
+    for line in lines:
+        left = (line.bbox.x1 - x1) * mm_x
+        top = (line.bbox.y1 - y1) * mm_y
+        width = max(line.bbox.width * mm_x, 0.4)
+        parts.append(
+            f'<div style="position:absolute;left:{round(left, 3)}mm;top:{round(top, 3)}mm;'
+            f'width:{round(width, 3)}mm;{typography_css};line-height:1.05;'
+            f'white-space:nowrap;">{_escape(line.text)}</div>'
+        )
+    return (
+        f'<div class="el el-text"{data_id} style="position:absolute;'
+        f'left:{round(x1 * mm_x + offset_x, 3)}mm;top:{round(y1 * mm_y + offset_y, 3)}mm;'
+        f'width:{round(max((x2 - x1) * mm_x, 0.4), 3)}mm;'
+        f'height:{round(max((y2 - y1) * mm_y, 0.4), 3)}mm;">{"".join(parts)}</div>'
+    )
+
+
 def _render_text(element: Element, page: PageIR, options: HtmlRenderOptions) -> str:
     overrides = options.overrides.get(element.id, {})
     text = overrides.get("text", element.text) or ""
+    data_id = f' data-element-id="{_escape(element.id)}"' if options.include_element_ids else ""
+    if "text" not in overrides:
+        placed = _render_text_lines(element, page, options, overrides, data_id)
+        if placed is not None:
+            return placed
     css = _position_css(page, element, overrides, options.global_offset_mm) + _typography_css(
         element.typography, overrides, options.font_scale
     )
     align = overrides.get("alignment") or (element.alignment.value if element.alignment else "left")
     padding = overrides.get("padding_mm", 0)
-    data_id = f' data-element-id="{_escape(element.id)}"' if options.include_element_ids else ""
     return (
         f'<div class="el el-text"{data_id} style="{css};text-align:{align};'
         f'padding:{padding}mm;overflow:hidden;white-space:pre-wrap;">{_escape(text)}</div>'
@@ -156,7 +219,7 @@ def _render_image(element: Element, page: PageIR, options: HtmlRenderOptions) ->
     )
 
 
-def _render_table(element: Element, page: PageIR, options: HtmlRenderOptions) -> str:
+def _render_table(element: Element, page: PageIR, options: HtmlRenderOptions) -> str:  # noqa: C901
     overrides = options.overrides.get(element.id, {})
     table: TableContent | None = element.table
     css = _position_css(page, element, overrides, options.global_offset_mm)
@@ -164,41 +227,62 @@ def _render_table(element: Element, page: PageIR, options: HtmlRenderOptions) ->
     if table is None or not table.cells:
         return f'<div class="el el-table"{data_id} style="{css}border:1px dashed #999;"></div>'
 
-    total_width_px = element.bbox.width or 1.0
     mm_x = page.mm_per_px_x
-    column_widths = table.column_widths_mm or [
-        (element.bbox.width * mm_x) / max(table.cols, 1) for _ in range(table.cols)
-    ]
-    if len(column_widths) != table.cols:
-        column_widths = [(element.bbox.width * mm_x) / max(table.cols, 1) for _ in range(table.cols)]
+    element_width_mm = max((element.bbox.width or 1.0) * mm_x, 0.1)
+    column_widths = list(table.column_widths_mm or [])
+    if len(column_widths) != table.cols or any(w <= 0 for w in column_widths):
+        column_widths = [element_width_mm / max(table.cols, 1) for _ in range(table.cols)]
+    else:
+        total = sum(column_widths)
+        if total > element_width_mm * 1.25:
+            # widths were stored in pixels by an older version: rescale to fit
+            factor = element_width_mm / total
+            column_widths = [w * factor for w in column_widths]
     colgroup = "".join(f'<col style="width:{round(float(w), 3)}mm">' for w in column_widths)
 
     grid: dict[tuple[int, int], Any] = {}
     for cell in table.cells:
         grid[(cell.row, cell.col)] = cell
     border_style = "1px solid #333" if table.has_outer_border else "none"
+    row_heights = list(table.row_heights_mm or [])
+    body_size = _page_body_size(page)
     rows_html: list[str] = []
     for row in range(table.rows):
+        # keep a row inside the height it had in the original: an oversized cell
+        # font would push the table over the content below it
+        row_height_mm = row_heights[row] if row < len(row_heights) else None
+        max_pt = (row_height_mm * (72.0 / 25.4) / 1.25) if row_height_mm else None
+        row_style = f' style="height:{round(row_height_mm, 3)}mm"' if row_height_mm else ""
         cells_html: list[str] = []
         for col in range(table.cols):
             cell = grid.get((row, col))
             if cell is None:
                 continue
-            cell_css = [f"border:{border_style}", "padding:1mm", "vertical-align:top", "overflow:hidden"]
+            cell_css = [f"border:{border_style}", "padding:0.2mm", "vertical-align:top", "overflow:hidden", "line-height:1.15"]
             if cell.is_header:
                 cell_css.append("font-weight:600")
             if cell.background_color:
                 cell_css.append(f"background-color:{cell.background_color}")
             if cell.alignment:
                 cell_css.append(f"text-align:{cell.alignment.value}")
-            cell_css.append(_typography_css(cell.typography, None, options.font_scale))
+            cell_size = (cell.typography.font_size_pt if cell.typography else None) or body_size
+            if max_pt:
+                cell_size = min(float(cell_size), max_pt)
+            cell_css.append(
+                _typography_css(
+                    cell.typography,
+                    {"font_size_pt": round(cell_size, 2)},
+                    options.font_scale,
+                    body_size,
+                )
+            )
             span = ""
             if cell.col_span > 1:
                 span += f' colspan="{cell.col_span}"'
             if cell.row_span > 1:
                 span += f' rowspan="{cell.row_span}"'
             cells_html.append(f'<td style="{";".join(cell_css)}">{_escape(cell.text)}</td>')
-        rows_html.append(f"<tr>{''.join(cells_html)}</tr>")
+        rows_html.append(f"<tr{row_style}>{''.join(cells_html)}</tr>")
     return (
         f'<div class="el el-table"{data_id} style="{css}">'
         f'<table style="border-collapse:collapse;width:100%;table-layout:fixed;">'

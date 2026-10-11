@@ -597,8 +597,11 @@ class DocumentPipeline:
             for record in pages
         ]
 
-        def table_builder(image: np.ndarray, box: Any) -> tuple[Any, list[Any]]:
-            return reconstruct_table(image, box, chain, ctx.settings)
+        def make_table_builder(mm_per_px: float) -> Any:
+            def table_builder(image: np.ndarray, box: Any) -> tuple[Any, list[Any]]:
+                return reconstruct_table(image, box, chain, ctx.settings, mm_per_px=mm_per_px)
+
+            return table_builder
 
         for record in pages:
             key = str(record["index"])
@@ -611,6 +614,9 @@ class DocumentPipeline:
                 for name, payload in (ocr_pages.get(key) or {}).items()
             }
             page_format = PageFormat.model_validate(record["page_format"])
+            # px -> mm for this page, so tables can be stored in real units
+            mm_per_px = page_format.width_mm / max(int(image.shape[1]), 1)
+            table_builder = make_table_builder(mm_per_px)
             from .schemas import PageTransform
 
             transforms = [PageTransform.model_validate(t) for t in record["transforms"]]

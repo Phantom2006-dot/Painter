@@ -246,6 +246,7 @@ def reconstruct_table(
     region: BBox,
     ocr_chain: Any,
     settings: Settings,
+    mm_per_px: float | None = None,
 ) -> tuple[TableContent, list[TextLine]]:
     """Reconstruct a table: grid, merged cells, borders and cell text."""
     crop = crop_box(image, region)
@@ -340,9 +341,16 @@ def reconstruct_table(
         for cell in first_row:
             cell.is_header = bool(header_rows)
 
-    mm_x = image.shape[1] and 0.0
-    column_widths = [float(col_bounds[i + 1] - col_bounds[i]) for i in range(cols)]
-    row_heights = [float(row_bounds[i + 1] - row_bounds[i]) for i in range(rows)]
+    # TableContent stores millimetres, so the measured pixel bounds must be
+    # converted with the page scale. Without a scale the widths stay empty and
+    # the renderer derives them from the element geometry.
+    scale_mm = float(mm_per_px) if mm_per_px and mm_per_px > 0 else 0.0
+    column_widths = (
+        [float(col_bounds[i + 1] - col_bounds[i]) * scale_mm for i in range(cols)] if scale_mm else []
+    )
+    row_heights = (
+        [float(row_bounds[i + 1] - row_bounds[i]) * scale_mm for i in range(rows)] if scale_mm else []
+    )
 
     content = TableContent(
         rows=rows,
