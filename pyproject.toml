@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "painter"
+version = "1.0.0"
+description = "AI document reconstruction and replication engine"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+dependencies = [
+    "numpy>=1.26",
+    "opencv-python-headless>=4.9",
+    "pydantic>=2.6",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "python-multipart>=0.0.9",
+    "requests>=2.31",
+    "Pillow>=10.2",
+]
+
+[project.optional-dependencies]
+detection = [
+    "ultralytics>=8.2",
+    "doclayout-yolo",
+    "py-cpuinfo",
+    "torch>=2.2",
+    "torchvision>=0.17",
+    "huggingface_hub>=0.23",
+]
+ocr = ["pytesseract>=0.3.10"]
+render = ["weasyprint>=61", "python-docx>=1.1"]
+verify = ["scikit-image>=0.22"]
+dev = ["pytest>=8.0", "httpx>=0.27", "playwright>=1.42"]
+
+[project.scripts]
+painter = "painter.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["painter*"]
+
+[tool.setuptools.package-data]
+painter = ["web/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "slow: tests that run the full pipeline or rasterise pages",
+]
+filterwarnings = ["ignore::DeprecationWarning"]

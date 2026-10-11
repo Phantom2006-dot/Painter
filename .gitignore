@@ -1,0 +1,22 @@
+# runtime state: uploads, processed pages, stage artefacts, exports, database
+data/
+exports/
+
+# secrets
+.env
+.env.local
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# editor / os
+.DS_Store
+.idea/
+.vscode/

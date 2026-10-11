@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Painter — Document Reconstruction</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header>
+  <h1>Painter <span>document reconstruction</span></h1>
+  <div id="capabilities" class="capabilities">checking capabilities…</div>
+</header>
+
+<main>
+  <section class="column left">
+    <div class="card">
+      <h2>1. Upload</h2>
+      <label id="dropzone" class="dropzone">
+        <input type="file" id="file" accept=".png,.jpg,.jpeg,.webp,.tif,.tiff,.bmp,.pdf" hidden>
+        <strong>Choose a scan, photo or PDF</strong>
+        <span id="uploadHint">PNG, JPG, WEBP, TIFF, BMP or PDF</span>
+      </label>
+      <div id="uploadStatus" class="status"></div>
+    </div>
+
+    <div class="card">
+      <h2>2. Process</h2>
+      <div class="options">
+        <label>OCR engine
+          <select id="ocrProvider">
+            <option value="">auto (Tesseract, then Lens)</option>
+            <option value="tesseract">tesseract (local)</option>
+            <option value="lens">Google Lens via SerpApi</option>
+            <option value="none">none</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="enableVerify" checked> run visual verification</label>
+        <label class="check"><input type="checkbox" id="correctionLoop" checked> bounded correction loop</label>
+        <label class="check"><input type="checkbox" id="enableLens"> allow SerpApi / Google Lens calls</label>
+        <label class="check"><input type="checkbox" id="enableAssets"> download matched images</label>
+      </div>
+      <button id="processBtn" disabled>Process document</button>
+      <div id="jobStatus" class="status"></div>
+      <ul id="stageList" class="stages"></ul>
+    </div>
+
+    <div class="card">
+      <h2>Documents</h2>
+      <ul id="documentList" class="documents"></ul>
+    </div>
+  </section>
+
+  <section class="column center">
+    <div class="card viewer">
+      <div class="toolbar">
+        <div class="tabs">
+          <button class="tab active" data-view="original">Original</button>
+          <button class="tab" data-view="detection">Detection</button>
+          <button class="tab" data-view="reconstruction">Reconstruction</button>
+          <button class="tab" data-view="compare">Compare</button>
+        </div>
+        <div class="controls">
+          <button id="prevPage" title="previous page">&larr;</button>
+          <span id="pageLabel">page –</span>
+          <button id="nextPage" title="next page">&rarr;</button>
+          <button id="zoomOut">–</button>
+          <span id="zoomLabel">100%</span>
+          <button id="zoomIn">+</button>
+          <button id="refreshPreview">refresh</button>
+        </div>
+      </div>
+      <div id="viewerArea" class="viewer-area">
+        <p class="placeholder">Upload and process a document to see it here.</p>
+      </div>
+      <div id="qualityPanel" class="quality"></div>
+    </div>
+  </section>
+
+  <section class="column right">
+    <div class="card">
+      <h2>Results</h2>
+      <div id="stats" class="stats"></div>
+      <div id="warnings" class="warnings"></div>
+      <label class="check"><input type="checkbox" id="onlyReview"> show only elements flagged for review</label>
+      <ul id="elementList" class="elements"></ul>
+    </div>
+
+    <div class="card editor">
+      <h2>Element editor</h2>
+      <div id="editorBody"><p class="placeholder">Select an element to edit it.</p></div>
+    </div>
+
+    <div class="card">
+      <h2>Export</h2>
+      <div class="export-row">
+        <button id="exportPdf" disabled>Download PDF</button>
+        <button id="exportDocx" disabled>Download DOCX</button>
+        <button id="exportHtml" disabled>Download HTML</button>
+      </div>
+      <div id="exportStatus" class="status"></div>
+    </div>
+  </section>
+</main>
+
+<template id="editorTemplate">
+  <div class="editor-form">
+    <div class="field"><label>Type</label><input data-field="type" type="text"></div>
+    <div class="field"><label>Text</label><textarea data-field="text" rows="4"></textarea></div>
+    <div class="field"><label>Font family</label><input data-field="font_family" type="text"></div>
+    <div class="row">
+      <div class="field"><label>Size (pt)</label><input data-field="font_size_pt" type="number" step="0.5"></div>
+      <div class="field"><label>Weight</label><input data-field="font_weight" type="number" step="100"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Colour</label><input data-field="color" type="text" placeholder="#000000"></div>
+      <div class="field"><label>Alignment</label>
+        <select data-field="alignment">
+          <option value="left">left</option>
+          <option value="center">center</option>
+          <option value="right">right</option>
+          <option value="justify">justify</option>
+        </select>
+      </div>
+    </div>
+    <div class="row">
+      <div class="field"><label>X (mm)</label><input data-field="x_mm" type="number" step="0.5"></div>
+      <div class="field"><label>Y (mm)</label><input data-field="y_mm" type="number" step="0.5"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Width (mm)</label><input data-field="width_mm" type="number" step="0.5"></div>
+      <div class="field"><label>Height (mm)</label><input data-field="height_mm" type="number" step="0.5"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Line height (pt)</label><input data-field="line_height_pt" type="number" step="0.5"></div>
+      <div class="field"><label>Space after (pt)</label><input data-field="paragraph_spacing_pt" type="number" step="0.5"></div>
+    </div>
+    <div class="field"><label>Image asset path</label><input data-field="asset_path" type="text"></div>
+    <div class="field"><label>Table cells (JSON, row/col/text)</label><textarea data-field="cells" rows="3" placeholder='[{"row":0,"col":0,"text":"Total"}]'></textarea></div>
+    <div class="editor-actions">
+      <button id="saveElement">Save and re-render</button>
+      <span id="editorStatus" class="status"></span>
+    </div>
+  </div>
+</template>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
