@@ -242,6 +242,13 @@ def load_settings(**overrides: object) -> Settings:
         log_level=_env_str("PAINTER_LOG_LEVEL", "INFO") or "INFO",
         serpapi=serpapi,
     )
+    # values saved through the web UI win over the environment, and explicit
+    # keyword overrides still win over both
+    from .settings_store import apply_overrides, load_overrides
+
+    stored = load_overrides(settings.data_dir)
+    if stored:
+        settings = apply_overrides(settings, stored)
     if overrides:
         settings = Settings(**{**settings.__dict__, **overrides})
     return settings

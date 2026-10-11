@@ -161,3 +161,11 @@ label.check { flex-direction: row; align-items: center; gap: 8px; }
 .editor-actions { display: flex; align-items: center; gap: 10px; }
 
 .export-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ---- runtime settings (SerpApi key) ---------------------------------- */
+.card.settings .hint { margin: 0 0 10px; font-size: 12px; line-height: 1.45; color: var(--muted, #6b7280); }
+.card.settings code { background: rgba(0,0,0,.06); padding: 0 3px; border-radius: 3px; }
+.card.settings .buttons { display: flex; gap: 8px; margin: 10px 0 6px; }
+.card.settings button.ghost { background: transparent; border: 1px solid var(--border, #d0d4da); color: inherit; }
+.status.ok { color: #15803d; }
+.status.bad { color: #b91c1c; }

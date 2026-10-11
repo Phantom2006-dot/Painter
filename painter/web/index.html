@@ -14,6 +14,25 @@
 
 <main>
   <section class="column left">
+    <div class="card settings">
+      <h2>SerpApi key</h2>
+      <p class="hint">Paste your SerpApi key to enable Google Lens (image recovery and
+        last-resort text). It is stored on this server with <code>0600</code> permissions,
+        never returned to the browser and never written to the log.</p>
+      <div class="field">
+        <label for="serpApiKey">API key</label>
+        <input type="password" id="serpApiKey" autocomplete="off" spellcheck="false"
+               placeholder="paste your key, then press Save">
+      </div>
+      <label class="check"><input type="checkbox" id="serpApiEnabled"> enable SerpApi / Google Lens calls</label>
+      <div class="row buttons">
+        <button id="saveSerpApi" type="button">Save</button>
+        <button id="verifySerpApi" type="button">Verify</button>
+        <button id="clearSerpApi" type="button" class="ghost">Clear</button>
+      </div>
+      <div id="serpApiStatus" class="status">checking…</div>
+    </div>
+
     <div class="card">
       <h2>1. Upload</h2>
       <label id="dropzone" class="dropzone">

@@ -21,15 +21,27 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .config import Settings, get_settings
+from .config import Settings, get_settings, load_settings
 from .editing import apply_element_edit, export_artifacts, re_render
-from .errors import NotFoundError, PainterError, UnsupportedFormatError, UploadTooLargeError
+from .errors import (
+    NotFoundError,
+    PainterError,
+    UnsupportedFormatError,
+    UploadTooLargeError,
+    ValidationError,
+)
 from .logging_utils import configure_logging, get_logger, log_event
 from .ocr import TesseractProvider
 from .pipeline import DocumentPipeline, PipelineOptions
 from .render import HtmlRenderOptions, render_document
 from .schemas import DocumentIR
 from .serpapi_client import SerpApiClient, UsageLedger, describe_configuration
+from .settings_store import (
+    describe as describe_settings,
+    save_overrides,
+    validate_api_key,
+    verify_api_key,
+)
 from .storage import Repository, cleanup_workspaces
 
 logger = get_logger("api")
@@ -86,6 +98,14 @@ class ReconstructRequest(BaseModel):
 class VerifyRequest(BaseModel):
     run_correction_loop: bool = True
     page: int | None = None
+
+
+class SerpApiSettingsRequest(BaseModel):
+    """Paste a SerpApi key at runtime instead of editing the environment."""
+
+    api_key: str | None = None
+    enabled: bool | None = None
+    verify: bool = False
 
 
 # --------------------------------------------------------------------------
@@ -156,6 +176,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.repository = repository
     app.state.pipeline = pipeline
     app.state.jobs = jobs
+
+    def settings_state() -> dict[str, Any]:
+        """Effective settings, with the SerpApi key masked to a hint."""
+        return describe_settings(settings, settings.data_dir)
 
     # -- auth ------------------------------------------------------------
     def require_token(authorization: str | None = Header(default=None), x_api_token: str | None = Header(default=None)) -> None:
@@ -271,6 +295,61 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "content_type": record["content_type"],
             "status": record["status"],
         }
+
+    # -- runtime settings -------------------------------------------------
+    @app.get("/api/settings", dependencies=guarded)
+    def get_settings_state() -> dict[str, Any]:
+        """Report the effective SerpApi state without ever returning the key."""
+        return settings_state()
+
+    @app.put("/api/settings/serpapi", dependencies=guarded)
+    def put_serpapi_settings(request: SerpApiSettingsRequest) -> dict[str, Any]:
+        """Store a SerpApi key (and enable/disable Lens) for this instance."""
+        nonlocal settings
+        updates: dict[str, Any] = {}
+        if request.api_key is not None:
+            updates["serpapi_api_key"] = validate_api_key(request.api_key)
+        if request.enabled is not None:
+            updates["serpapi_enabled"] = bool(request.enabled)
+        if not updates:
+            raise ValidationError("nothing to update: pass api_key and/or enabled")
+        verified: bool | None = None
+        message: str | None = None
+        if request.verify and updates.get("serpapi_api_key"):
+            verified, message = verify_api_key(
+                updates["serpapi_api_key"],
+                settings.serpapi.base_url,
+                timeout_s=settings.serpapi.timeout_s,
+            )
+        save_overrides(settings.data_dir, updates)
+        # rebuild the live settings so the running pipeline sees the change now
+        settings = load_settings(refresh=True)
+        app.state.settings = settings
+        pipeline.settings = settings
+        logger.info("serpapi settings updated: key_set=%s enabled=%s", bool(updates.get("serpapi_api_key")), settings.serpapi.enabled)
+        state = settings_state()
+        state["verified"] = verified
+        state["message"] = message
+        return state
+
+    @app.delete("/api/settings/serpapi", dependencies=guarded)
+    def delete_serpapi_settings() -> dict[str, Any]:
+        """Forget a stored key and switch Lens off."""
+        nonlocal settings
+        save_overrides(settings.data_dir, {"serpapi_api_key": None, "serpapi_enabled": False})
+        settings = load_settings(refresh=True)
+        app.state.settings = settings
+        pipeline.settings = settings
+        return settings_state()
+
+    @app.post("/api/settings/serpapi/verify", dependencies=guarded)
+    def verify_serpapi_settings() -> dict[str, Any]:
+        """Check the key currently in effect, without changing anything."""
+        key = settings.serpapi.api_key
+        if not key:
+            raise ValidationError("no SerpApi key is configured")
+        ok, message = verify_api_key(key, settings.serpapi.base_url, timeout_s=settings.serpapi.timeout_s)
+        return {"verified": ok, "message": message}
 
     @app.get("/api/documents", dependencies=guarded)
     def list_documents(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:

@@ -16,9 +16,23 @@ const state = {
 
 const el = (id) => document.getElementById(id);
 
+// When the server sets PAINTER_API_TOKEN, the token travels in the URL fragment
+// (never sent to the server) and is kept in localStorage for later visits.
+function authHeaders() {
+  const fromHash = new URLSearchParams(location.hash.replace(/^#/, "")).get("token");
+  if (fromHash) {
+    localStorage.setItem("painterToken", fromHash);
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+  const token = fromHash || localStorage.getItem("painterToken") || "";
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 async function api(path, options = {}) {
   const response = await fetch(path, {
-    headers: options.body instanceof FormData ? {} : { "Content-Type": "application/json" },
+    headers: {
+      ...(options.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
+      ...authHeaders(),
+    },
     ...options,
   });
   if (!response.ok) {
@@ -357,6 +371,69 @@ async function runExport(format) {
   }
 }
 
+// ---------------------------------------------------------------- settings
+async function loadSettings() {
+  try {
+    const settings = await api("/api/settings");
+    applySettings(settings);
+  } catch (error) {
+    setStatus(el("serpApiStatus"), `settings unavailable: ${error.message}`, "bad");
+  }
+}
+function applySettings(settings) {
+  el("serpApiEnabled").checked = Boolean(settings.serpapi_enabled);
+  const where = settings.serpapi_key_source ? ` (from ${settings.serpapi_key_source})` : "";
+  setStatus(
+    el("serpApiStatus"),
+    settings.serpapi_key_set
+      ? `key configured ${settings.serpapi_key_hint}${where}`
+      : "no key configured — Tesseract is used for all text",
+    settings.serpapi_key_set ? "ok" : "",
+  );
+  el("serpApiKey").value = "";
+}
+async function saveSerpApi() {
+  const key = el("serpApiKey").value.trim();
+  const enabled = el("serpApiEnabled").checked;
+  if (!key && !enabled) {
+    setStatus(el("serpApiStatus"), "paste a key or tick the enable box first", "bad");
+    return;
+  }
+  setStatus(el("serpApiStatus"), "saving…");
+  try {
+    const body = { enabled };
+    if (key) body.api_key = key;
+    const result = await api("/api/settings/serpapi", { method: "PUT", body: JSON.stringify(body) });
+    applySettings(result);
+    setStatus(
+      el("serpApiStatus"),
+      `saved — key ${result.serpapi_key_hint}${result.serpapi_enabled ? ", Lens enabled" : ", Lens disabled"}`,
+      "ok",
+    );
+    loadCapabilities();
+  } catch (error) {
+    setStatus(el("serpApiStatus"), `save failed: ${error.message}`, "bad");
+  }
+}
+async function verifySerpApi() {
+  setStatus(el("serpApiStatus"), "asking SerpApi…");
+  try {
+    const result = await api("/api/settings/serpapi/verify", { method: "POST" });
+    setStatus(el("serpApiStatus"), result.message, result.verified ? "ok" : "bad");
+  } catch (error) {
+    setStatus(el("serpApiStatus"), `verify failed: ${error.message}`, "bad");
+  }
+}
+async function clearSerpApi() {
+  try {
+    const result = await api("/api/settings/serpapi", { method: "DELETE" });
+    applySettings(result);
+    setStatus(el("serpApiStatus"), "key cleared; Tesseract remains active", "");
+    loadCapabilities();
+  } catch (error) {
+    setStatus(el("serpApiStatus"), `clear failed: ${error.message}`, "bad");
+  }
+}
 // ---------------------------------------------------------------- wiring
 function wire() {
   const input = el("file");
@@ -371,6 +448,12 @@ function wire() {
   });
 
   el("processBtn").onclick = startProcessing;
+  el("saveSerpApi").onclick = saveSerpApi;
+  el("verifySerpApi").onclick = verifySerpApi;
+  el("clearSerpApi").onclick = clearSerpApi;
+  el("serpApiKey").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") saveSerpApi();
+  });
   el("onlyReview").onchange = () => loadElements().catch(() => {});
   el("refreshPreview").onclick = () => loadDocument();
   el("prevPage").onclick = () => { state.page = Math.max(0, state.page - 1); renderView(); renderQuality(); };
@@ -394,4 +477,5 @@ function wire() {
 
 wire();
 loadCapabilities();
+loadSettings();
 refreshDocuments();
