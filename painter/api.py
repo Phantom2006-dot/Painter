@@ -8,6 +8,7 @@ polls ``/status``.
 from __future__ import annotations
 
 import json
+import secrets
 import shutil
 import tempfile
 import threading
@@ -16,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -182,7 +183,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return describe_settings(settings, settings.data_dir)
 
     # -- auth ------------------------------------------------------------
-    def require_token(authorization: str | None = Header(default=None), x_api_token: str | None = Header(default=None)) -> None:
+    def require_token(
+        authorization: str | None = Header(default=None),
+        x_api_token: str | None = Header(default=None),
+        token: str | None = Query(default=None),
+        painter_token: str | None = Cookie(default=None),
+    ) -> None:
+        """Accept the token as a header, a query parameter or a cookie.
+
+        ``<img>`` and ``<iframe>`` requests cannot carry an Authorization header,
+        so the browser may also send the token in the URL or as a same-origin
+        cookie set by the web UI.
+        """
         expected = settings.api_token
         if not expected:
             return
@@ -191,7 +203,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             supplied = authorization[7:].strip()
         elif x_api_token:
             supplied = x_api_token.strip()
-        if supplied != expected:
+        elif token:
+            supplied = token.strip()
+        elif painter_token:
+            supplied = painter_token.strip()
+        if not supplied or not secrets.compare_digest(supplied, expected):
             raise HTTPException(status_code=401, detail="invalid or missing API token")
 
     guarded = [Depends(require_token)]

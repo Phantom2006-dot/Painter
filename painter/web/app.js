@@ -9,6 +9,7 @@ const state = {
   elements: [],
   selected: null,
   view: "original",
+  processed: false,
   page: 0,
   zoom: 1,
   pollTimer: null,
@@ -17,15 +18,28 @@ const state = {
 const el = (id) => document.getElementById(id);
 
 // When the server sets PAINTER_API_TOKEN, the token travels in the URL fragment
-// (never sent to the server) and is kept in localStorage for later visits.
-function authHeaders() {
+// (never sent to the server) and is kept in localStorage for later visits. It is
+// also mirrored into a same-origin cookie so <img>/<iframe> requests, which
+// cannot carry an Authorization header, still authenticate.
+function authToken() {
   const fromHash = new URLSearchParams(location.hash.replace(/^#/, "")).get("token");
   if (fromHash) {
     localStorage.setItem("painterToken", fromHash);
     history.replaceState(null, "", location.pathname + location.search);
   }
   const token = fromHash || localStorage.getItem("painterToken") || "";
+  if (token) document.cookie = `painter_token=${encodeURIComponent(token)}; path=/; SameSite=Strict`;
+  return token;
+}
+function authHeaders() {
+  const token = authToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+// append the token to a media URL as well, in case cookies are blocked
+function withToken(url) {
+  const token = authToken();
+  if (!token) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
 }
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -99,10 +113,11 @@ async function selectDocument(documentId) {
   state.documentId = documentId;
   state.selected = null;
   state.page = 0;
+  state.processed = false;
   el("processBtn").disabled = false;
-  el("exportPdf").disabled = false;
-  el("exportDocx").disabled = false;
-  el("exportHtml").disabled = false;
+  el("exportPdf").disabled = true;
+  el("exportDocx").disabled = true;
+  el("exportHtml").disabled = true;
   await refreshDocuments();
   await loadDocument();
 }
@@ -111,6 +126,24 @@ async function loadDocument() {
   if (!state.documentId) return;
   try {
     const payload = await api(`/api/documents/${state.documentId}`);
+    state.processed = Boolean(payload.stats);
+    if (!state.processed) {
+      // nothing to show yet: say so instead of asking for results that do not exist
+      el("stats").innerHTML = "";
+      el("warnings").innerHTML = "";
+      el("elementList").innerHTML = "";
+      el("qualityPanel").innerHTML = "";
+      el("exportPdf").disabled = true;
+      el("exportDocx").disabled = true;
+      el("exportHtml").disabled = true;
+      setStatus(el("uploadStatus"), "uploaded — not processed yet, press “Process document”", "");
+      renderView();
+      return;
+    }
+    setStatus(el("uploadStatus"), `${payload.document.filename} (${state.documentId})`, "ok");
+    el("exportPdf").disabled = false;
+    el("exportDocx").disabled = false;
+    el("exportHtml").disabled = false;
     const stats = payload.stats || {};
     el("stats").innerHTML = Object.entries(stats)
       .map(([key, value]) => `<span>${key}: ${typeof value === "object" ? JSON.stringify(value) : value}</span>`)
@@ -133,7 +166,7 @@ function escapeHtml(value) {
 }
 
 async function loadElements() {
-  if (!state.documentId) return;
+  if (!state.documentId || !state.processed) return;
   const onlyReview = el("onlyReview").checked;
   const payload = await api(`/api/documents/${state.documentId}/elements${onlyReview ? "?needs_review=true" : ""}`);
   state.elements = payload.elements || [];
@@ -179,6 +212,10 @@ function renderView() {
     area.innerHTML = '<p class="placeholder">Upload and process a document to see it here.</p>';
     return;
   }
+  if (!state.processed) {
+    area.innerHTML = '<p class="placeholder">Uploaded, not processed yet — press <b>Process document</b>.</p>';
+    return;
+  }
   const base = `/api/documents/${state.documentId}/files`;
   const page = state.pages[state.page] || { index: 0 };
   const pageIndex = page.index || 0;
@@ -196,16 +233,16 @@ function renderView() {
     pane.className = "pane";
     area.appendChild(pane);
     pane.innerHTML = `<div><div class="muted" style="font-size:11.5px;margin-bottom:4px">original page ${pageIndex + 1}</div>
-      <img src="${base}/pages/page_${String(pageIndex).padStart(2, "0")}_preview.jpg" style="width:${width}px"></div>`;
+      <img src="${withToken(`${base}/pages/page_${String(pageIndex).padStart(2, "0")}_preview.jpg`)}" style="width:${width}px"></div>`;
   } else if (state.view === "detection") {
     const pane = document.createElement("div");
     pane.className = "pane";
     area.appendChild(pane);
     pane.innerHTML = `<div><div class="muted" style="font-size:11.5px;margin-bottom:4px">detected regions</div>
-      <img src="${base}/pages/page_${String(pageIndex).padStart(2, "0")}_overlay.jpg" style="width:${width}px"></div>`;
+      <img src="${withToken(`${base}/pages/page_${String(pageIndex).padStart(2, "0")}_overlay.jpg`)}" style="width:${width}px"></div>`;
   } else if (state.view === "reconstruction") {
     const frame = document.createElement("iframe");
-    frame.src = `/api/documents/${state.documentId}/preview`;
+    frame.src = withToken(`/api/documents/${state.documentId}/preview`);
     frame.style.height = `${Math.round(700 * state.zoom)}px`;
     area.appendChild(frame);
   } else if (state.view === "compare") {
@@ -214,9 +251,9 @@ function renderView() {
     area.appendChild(pane);
     pane.innerHTML = `
       <div><div class="muted" style="font-size:11.5px;margin-bottom:4px">original</div>
-        <img src="${base}/pages/page_${String(pageIndex).padStart(2, "0")}_preview.jpg" style="width:${width}px"></div>
+        <img src="${withToken(`${base}/pages/page_${String(pageIndex).padStart(2, "0")}_preview.jpg`)}" style="width:${width}px"></div>
       <div><div class="muted" style="font-size:11.5px;margin-bottom:4px">reconstruction (rendered)</div>
-        <img src="/api/documents/${state.documentId}/preview.png?page=${pageIndex}" style="width:${width}px"></div>`;
+        <img src="${withToken(`/api/documents/${state.documentId}/preview.png?page=${pageIndex}`)}" style="width:${width}px"></div>`;
   }
   el("pageLabel").textContent = `page ${pageIndex + 1}/${Math.max(state.pages.length, 1)}`;
   el("zoomLabel").textContent = `${Math.round(state.zoom * 100)}%`;
@@ -230,8 +267,9 @@ async function uploadFile(file) {
   form.append("file", file);
   try {
     const payload = await api("/api/documents/upload", { method: "POST", body: form });
-    setStatus(el("uploadStatus"), `uploaded ${payload.filename} (${payload.document_id})`, "ok");
+    setStatus(el("uploadStatus"), `uploaded ${payload.filename} — starting the pipeline…`, "ok");
     await selectDocument(payload.document_id);
+    await startProcessing();
   } catch (error) {
     setStatus(el("uploadStatus"), error.message, "error");
   }
@@ -365,7 +403,7 @@ async function runExport(format) {
     });
     const descriptor = payload.exports[format];
     setStatus(el("exportStatus"), `${format} ready (${Math.round(descriptor.size_bytes / 1024)} KB)`, "ok");
-    window.location.href = descriptor.url;
+    window.location.href = withToken(descriptor.url);
   } catch (error) {
     setStatus(el("exportStatus"), error.message, "error");
   }
