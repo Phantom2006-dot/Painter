@@ -217,6 +217,24 @@ The benchmark report is written to `data/benchmark/benchmark_report.json` with
 per-case metrics: OCR accuracy, table-cell accuracy, visual similarity (SSIM,
 pixel difference, edge IoU, projection correlation) and export success.
 
+### Reconstruction quality on a real document
+
+Six defects found on a real email screenshot were fixed and are pinned by
+regression tests in `tests/test_quality_fixes.py`:
+
+| Defect | Measured before | After |
+|---|---|---|
+| Non-paper page forced onto A6 | body text ≈ 4.8pt | custom 282×135mm page, body text 9.6pt |
+| Table column widths stored in pixels | 750mm of columns on a 141mm page | widths rescaled to the element |
+| Text lines detected as fragments | sentences lost their opening words | 14 lines widened to their full ink extent |
+| Lines the detector missed | 2 sentences vanished | 2 recovered from page ink |
+| Table spilling over the paragraph below | overlap | cells capped to their row height |
+| Multi-line paragraph spacing | lines drifted out of position | each OCR line placed at its measured position |
+
+Result on that document: 7 elements, 0 flagged for review, all text present and
+positioned as in the original. See [docs/TRAINING.md](docs/TRAINING.md) for the
+detector measurements that showed these were pipeline bugs, not a weak model.
+
 ---
 
 ## 7. Known limitations
@@ -241,9 +259,16 @@ pixel difference, edge IoU, projection correlation) and export success.
 * **Single-document scale.** Storage is SQLite plus the local file system with a
   bounded worker pool. The repository interface is the seam for moving to
   PostgreSQL and object storage, but that work has not been done.
-* **Training data is not included.** A purpose-trained detector needs thousands
-  of labelled pages; [docs/DATASET.md](docs/DATASET.md) specifies the dataset,
-  classes and evaluation protocol.
+* **The shipped detector already beats a small fine-tune.** On the DocLayNet-small
+  validation split the shipped model scores mAP50 0.889; a 15-epoch CPU fine-tune
+  of `yolov8n` on 691 pages scored 0.533, so it is deliberately **not** the
+  default. Beating 0.889 needs the full DocLayNet (≈80k pages) and a GPU. The
+  tooling, dataset and honest numbers are in
+  [docs/TRAINING.md](docs/TRAINING.md), and
+  `painter.cli training-data` exports your own corrected documents as training
+  data so the next run learns from the pages this tool actually gets wrong.
+  [docs/DATASET.md](docs/DATASET.md) specifies the dataset, classes and
+  evaluation protocol.
 
 ---
 

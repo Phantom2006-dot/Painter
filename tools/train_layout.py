@@ -30,6 +30,12 @@ from pathlib import Path
 def evaluate(weights: str, data: str, imgsz: int, device: str, loader: str) -> dict:
     """Run validation and return the headline metrics."""
     if loader == "doclayout":
+        # doclayout_yolo still calls numpy.trapz, which NumPy 2.0 renamed to
+        # trapezoid; without this alias validation dies on the metrics pass
+        import numpy as np
+
+        if not hasattr(np, "trapz"):
+            np.trapz = np.trapezoid  # type: ignore[attr-defined]
         from doclayout_yolo import YOLOv10
 
         model = YOLOv10(weights)
