@@ -191,28 +191,131 @@ def _order_quad(points: np.ndarray) -> np.ndarray:
     return ordered
 
 
-def find_document_quad(image: np.ndarray, min_area_ratio: float = 0.25) -> np.ndarray | None:
-    """Find a plausible page boundary for a photographed document."""
-    height, width = image.shape[:2]
-    scale = min(1.0, 1000.0 / max(height, width))
-    small = cv2.resize(image, (int(width * scale), int(height * scale))) if scale < 1.0 else image
-    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-    gray = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges = cv2.Canny(gray, 50, 150)
+def _quad_contrast(gray: np.ndarray, quad: np.ndarray) -> float:
+    """Brightness step between the quad's interior and the ring around it.
+
+    A page lying on a surface is brighter than that surface. Requiring a real
+    step stops a shadow or a patch of the background being mistaken for the page.
+    """
+    height, width = gray.shape[:2]
+    mask = np.zeros((height, width), np.uint8)
+    cv2.fillPoly(mask, [quad.astype("int32")], 255)
+    inside = cv2.erode(mask, np.ones((9, 9), np.uint8))
+    outside = cv2.dilate(mask, np.ones((31, 31), np.uint8))
+    outside = cv2.bitwise_and(outside, cv2.bitwise_not(mask))
+    if cv2.countNonZero(inside) < 50 or cv2.countNonZero(outside) < 50:
+        return 0.0
+    inner = float(cv2.mean(gray, mask=inside)[0])
+    outer = float(cv2.mean(gray, mask=outside)[0])
+    return inner - outer
+
+
+def _quad_is_page(quad: np.ndarray, gray: np.ndarray, min_area_ratio: float) -> float:
+    """Score a candidate quad, or return 0 when it cannot be a page."""
+    height, width = gray.shape[:2]
+    frame_area = float(height * width)
+    area = float(cv2.contourArea(quad.astype("float32")))
+    ratio = area / frame_area if frame_area else 0.0
+    if ratio < min_area_ratio or ratio > 0.999:
+        return 0.0
+    if not cv2.isContourConvex(quad.astype("int32")):
+        return 0.0
+    ordered = _order_quad(quad)
+    top = np.linalg.norm(ordered[1] - ordered[0])
+    bottom = np.linalg.norm(ordered[2] - ordered[3])
+    left = np.linalg.norm(ordered[3] - ordered[0])
+    right = np.linalg.norm(ordered[2] - ordered[1])
+    if min(top, bottom, left, right) < 40:
+        return 0.0
+    long_side = max(top, bottom, left, right)
+    short_side = max(1.0, min(top, bottom, left, right))
+    if not 0.2 <= short_side / long_side <= 1.0:
+        return 0.0
+    contrast = _quad_contrast(gray, ordered)
+    if contrast < 10.0:
+        return 0.0
+    # prefer the largest well-separated page, but a weak contrast must not win
+    return ratio * min(1.0, contrast / 45.0)
+
+
+def _quad_from_brightness(gray: np.ndarray, min_area_ratio: float) -> np.ndarray | None:
+    """Segment the page as the large bright region it is.
+
+    An edge detector only sees the texture of the ground a page lies on; this
+    looks for the page itself. The image is blurred hard enough to erase surface
+    texture before thresholding, so only page-scale structure survives.
+    """
+    blurred = cv2.GaussianBlur(gray, (21, 21), 0)
+    _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    kernel = np.ones((9, 9), np.uint8)
+    closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
+    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    best: tuple[float, np.ndarray] | None = None
+    for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:6]:
+        hull = cv2.convexHull(contour)
+        perimeter = cv2.arcLength(hull, True)
+        for epsilon in (0.02, 0.03, 0.05):
+            approx = cv2.approxPolyDP(hull, epsilon * perimeter, True)
+            if len(approx) != 4:
+                continue
+            quad = approx.reshape(4, 2).astype("float32")
+            score = _quad_is_page(quad, gray, min_area_ratio)
+            if score > 0 and (best is None or score > best[0]):
+                best = (score, quad)
+            break
+    return None if best is None else best[1]
+
+
+def _quad_from_edges(gray: np.ndarray, min_area_ratio: float) -> np.ndarray | None:
+    """Fallback for pages whose border is a line rather than a brightness step."""
+    edges = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 50, 150)
     edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=1)
     contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-    frame_area = small.shape[0] * small.shape[1]
     best: tuple[float, np.ndarray] | None = None
     for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:8]:
-        area = cv2.contourArea(contour)
-        if area < frame_area * min_area_ratio:
-            continue
         perimeter = cv2.arcLength(contour, True)
         approx = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
-        if len(approx) != 4 or not cv2.isContourConvex(approx):
+        if len(approx) != 4:
             continue
-        if best is None or area > best[0]:
-            best = (area, approx)
+        quad = approx.reshape(4, 2).astype("float32")
+        score = _quad_is_page(quad, gray, min_area_ratio)
+        if score > 0 and (best is None or score > best[0]):
+            best = (score, quad)
+    return None if best is None else best[1]
+
+
+def find_document_quad(image: np.ndarray, min_area_ratio: float = 0.2) -> np.ndarray | None:
+    """Find the page inside a photograph, so the background can be dropped.
+
+    Two strategies are tried and the better-scoring quad wins:
+
+    1. **Brightness segmentation.** A page photographed on a desk, a floor or a
+       dark surface is a large bright region. This is the strategy that works on
+       a certificate lying on concrete, where an edge detector sees only gravel.
+    2. **Edge detection.** Kept for pages whose boundary is a drawn line or a
+       shadow edge rather than a brightness step.
+
+    Every candidate must be a convex quadrilateral, occupy a plausible share of
+    the frame, and sit a real brightness step above its surroundings. Returning
+    ``None`` is a valid answer: it means the caller must not pretend the whole
+    photograph is a page.
+    """
+    height, width = image.shape[:2]
+    scale = min(1.0, 1000.0 / max(height, width))
+    small = (
+        cv2.resize(image, (int(width * scale), int(height * scale)), interpolation=cv2.INTER_AREA)
+        if scale < 1.0
+        else image
+    )
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    best: tuple[float, np.ndarray] | None = None
+    for strategy in (_quad_from_brightness, _quad_from_edges):
+        quad = strategy(gray, min_area_ratio)
+        if quad is None:
+            continue
+        score = _quad_is_page(quad, gray, min_area_ratio)
+        if score > 0 and (best is None or score > best[0]):
+            best = (score, quad)
     if best is None:
         return None
     return _order_quad(best[1] / scale)
@@ -240,6 +343,32 @@ def warp_perspective(image: np.ndarray, quad: np.ndarray) -> tuple[np.ndarray, P
         note="document boundary detected and rectified",
     )
     return warped, transform
+
+
+def looks_like_photograph(image: np.ndarray) -> bool:
+    """Distinguish a camera photo from a screenshot or a scan.
+
+    A screenshot or a scan has a flat, near-white border; a photo of a page has
+    a textured or dark border because the surface around the page is in frame.
+    This matters because a photo *must* have its page located, and if it cannot
+    be, the caller has to say so instead of analysing the background.
+    """
+    if image is None or image.size == 0:
+        return False
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    height, width = gray.shape[:2]
+    band = max(4, int(min(height, width) * 0.02))
+    ring = np.concatenate(
+        [
+            gray[:band, :].ravel(),
+            gray[-band:, :].ravel(),
+            gray[:, :band].ravel(),
+            gray[:, -band:].ravel(),
+        ]
+    )
+    if ring.size == 0:
+        return False
+    return float(ring.std()) > 12.0 or float(ring.mean()) < 200.0
 
 
 def estimate_skew_angle(gray: np.ndarray) -> float:
@@ -330,7 +459,15 @@ def apply_quarter_turn(image: np.ndarray, turns: int) -> tuple[np.ndarray, PageT
 
 
 def reduce_shadow(image: np.ndarray) -> np.ndarray:
-    """Flatten uneven illumination by dividing out an estimated background."""
+    """Flatten uneven illumination and neutralise the light's colour cast.
+
+    Two separate problems are handled here, and both matter for OCR on a photo:
+    the brightness gradient of a page lit unevenly (divided out with an estimated
+    background), and the colour cast of ambient light — a page shot indoors comes
+    out blue, and OCR then reads "Department" as "Vepartment". The paper itself is
+    the reference for white, so the a/b channels are shifted until the brightest
+    part of the page is neutral.
+    """
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     lightness = lab[:, :, 0]
     kernel_size = max(15, (min(image.shape[:2]) // 15) | 1)
@@ -339,6 +476,13 @@ def reduce_shadow(image: np.ndarray) -> np.ndarray:
     background = cv2.GaussianBlur(background, (0, 0), sigmaX=max(3, kernel_size / 4))
     normalised = cv2.divide(lightness, background, scale=255)
     lab[:, :, 0] = normalised
+
+    paper = lightness >= float(np.percentile(lightness, 90))
+    if int(paper.sum()) > 100:
+        for index in (1, 2):
+            channel = lab[:, :, index].astype(np.float32)
+            reference = float(channel[paper].mean())
+            lab[:, :, index] = np.clip(channel - (reference - 128.0), 0, 255).astype(np.uint8)
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
@@ -450,6 +594,22 @@ def preprocess_page(
                 metrics["boundary_area_ratio"] = round(ratio, 4)
     except Exception as exc:
         warnings.append(f"document boundary detection skipped: {exc}")
+
+    metrics["boundary_found"] = 1.0 if any(t.kind == "perspective" for t in transforms) else 0.0
+    if not metrics["boundary_found"]:
+        photograph = is_photograph if is_photograph is not None else looks_like_photograph(image)
+        if photograph:
+            # the whole frame is about to be treated as the page, which means the
+            # surface the page is lying on is analysed as content. Say so loudly.
+            warnings.append(
+                "no page boundary was found in this photograph; the entire frame was treated as "
+                "the page, so the surface around the page may appear in the result"
+            )
+            assumptions.append(
+                "assumed the whole photograph is the page (no boundary detected); elements touching "
+                "the frame edges are likely background rather than content"
+            )
+            metrics["photograph_without_boundary"] = 1.0
 
     # 3. deskew
     try:
