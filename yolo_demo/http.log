@@ -1,0 +1,44 @@
+nohup: ignoring input
+127.0.0.1 - - [04/Oct/2026 07:55:12] "GET /comparison.jpg HTTP/1.1" 200 -
+10.2.93.2 - - [04/Oct/2026 07:55:16] "GET / HTTP/1.1" 200 -
+10.2.93.2 - - [04/Oct/2026 07:55:16] "GET /comparison.jpg HTTP/1.1" 200 -
+10.2.4.49 - - [04/Oct/2026 07:55:18] "GET / HTTP/1.1" 200 -
+10.2.4.49 - - [04/Oct/2026 07:55:18] "GET /comparison.jpg HTTP/1.1" 200 -
+10.2.4.49 - - [04/Oct/2026 07:55:18] "GET /runs/detect/predict/input.jpg HTTP/1.1" 200 -
+10.2.4.49 - - [04/Oct/2026 07:55:18] code 404, message File not found
+10.2.4.49 - - [04/Oct/2026 07:55:18] "GET /favicon.ico HTTP/1.1" 404 -
+10.2.4.49 - - [04/Oct/2026 07:55:28] "GET /comparison.jpg HTTP/1.1" 200 -
+10.2.4.49 - - [04/Oct/2026 07:55:31] "GET /runs/detect/predict/input.jpg HTTP/1.1" 304 -
+10.2.4.49 - - [04/Oct/2026 07:55:53] "GET / HTTP/1.1" 200 -
+10.2.4.49 - - [04/Oct/2026 07:55:53] "GET /runs/detect/predict/input.jpg HTTP/1.1" 200 -
+10.2.4.49 - - [04/Oct/2026 07:55:53] "GET /comparison.jpg HTTP/1.1" 200 -
+10.2.4.49 - - [04/Oct/2026 07:55:54] code 404, message File not found
+10.2.4.49 - - [04/Oct/2026 07:55:54] "GET /favicon.ico HTTP/1.1" 404 -
+10.2.30.130 - - [04/Oct/2026 07:57:54] "GET / HTTP/1.1" 200 -
+10.2.22.2 - - [04/Oct/2026 07:57:54] "GET /comparison_v12.jpg HTTP/1.1" 200 -
+10.2.22.2 - - [04/Oct/2026 07:57:54] "GET /runs/detect/predict-2/input.jpg HTTP/1.1" 200 -
+10.2.4.49 - - [04/Oct/2026 07:57:56] "GET / HTTP/1.1" 200 -
+10.2.4.49 - - [04/Oct/2026 07:57:56] "GET /comparison_v12.jpg HTTP/1.1" 200 -
+10.2.4.49 - - [04/Oct/2026 07:57:56] "GET /runs/detect/predict-2/input.jpg HTTP/1.1" 200 -
+10.2.22.2 - - [04/Oct/2026 07:58:21] "GET / HTTP/1.1" 200 -
+10.2.22.2 - - [04/Oct/2026 07:58:21] "GET /comparison_v12.jpg HTTP/1.1" 200 -
+10.2.22.2 - - [04/Oct/2026 07:58:21] "GET /runs/detect/predict-2/input.jpg HTTP/1.1" 200 -
+10.2.72.2 - - [04/Oct/2026 07:59:08] "GET / HTTP/1.1" 200 -
+10.2.22.2 - - [04/Oct/2026 07:59:08] "GET /comparison_v26.jpg HTTP/1.1" 200 -
+10.2.93.2 - - [04/Oct/2026 07:59:08] "GET /runs/detect/predict-3/input.jpg HTTP/1.1" 200 -
+10.2.4.49 - - [04/Oct/2026 07:59:09] "GET / HTTP/1.1" 200 -
+10.2.4.49 - - [04/Oct/2026 07:59:09] "GET /comparison_v26.jpg HTTP/1.1" 200 -
+10.2.4.49 - - [04/Oct/2026 07:59:09] "GET /runs/detect/predict-3/input.jpg HTTP/1.1" 200 -
+10.2.30.130 - - [04/Oct/2026 08:00:33] "GET / HTTP/1.1" 200 -
+10.2.4.49 - - [04/Oct/2026 08:00:33] "GET /comparison_v8.jpg HTTP/1.1" 200 -
+10.2.30.130 - - [04/Oct/2026 08:00:33] "GET /runs/detect/predict-4/input.jpg HTTP/1.1" 200 -
+10.2.4.49 - - [04/Oct/2026 08:00:35] "GET / HTTP/1.1" 200 -
+10.2.4.49 - - [04/Oct/2026 08:00:35] "GET /comparison_v8.jpg HTTP/1.1" 200 -
+10.2.4.49 - - [04/Oct/2026 08:00:35] "GET /runs/detect/predict-4/input.jpg HTTP/1.1" 200 -
+10.2.30.130 - - [04/Oct/2026 08:05:23] "GET / HTTP/1.1" 200 -
+10.2.30.130 - - [04/Oct/2026 08:05:23] "GET /runs/detect/predict-4/input.jpg HTTP/1.1" 200 -
+10.2.30.130 - - [04/Oct/2026 08:05:23] "GET /comparison_v8.jpg HTTP/1.1" 200 -
+10.2.30.130 - - [04/Oct/2026 08:08:44] "GET / HTTP/1.1" 304 -
+10.2.30.130 - - [04/Oct/2026 08:08:45] "GET /runs/detect/predict-4/input.jpg HTTP/1.1" 304 -
+10.2.30.130 - - [04/Oct/2026 08:08:45] "GET /comparison_v8.jpg HTTP/1.1" 304 -
+10.2.30.130 - - [04/Oct/2026 08:08:47] "GET / HTTP/1.1" 304 -

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>YOLO Detection Results</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #111; color: #eee;
+         margin: 0; padding: 24px; text-align: center; }
+  h1 { font-weight: 600; letter-spacing: .5px; }
+  h1 span { color: #4fc3f7; }
+  .card { background: #1c1c1e; border-radius: 12px; padding: 16px; margin: 20px auto; max-width: 1700px;
+          display: inline-block; box-shadow: 0 4px 24px rgba(0,0,0,.5); }
+  .card h2 { margin: 4px 0 12px; font-size: 18px; color: #bbb; font-weight: 500; }
+  img { max-width: 100%; height: auto; border-radius: 8px; }
+  .meta { color: #888; font-size: 14px; margin-top: 12px; }
+  ul { list-style: none; padding: 0; }
+  .badge { display: inline-block; background: #2a2a2e; border-radius: 20px; padding: 4px 14px;
+           margin: 3px; font-size: 14px; }
+  .badge b { color: #4fc3f7; }
+</style>
+</head>
+<body>
+  <h1>YOLO <span>Detection</span> Demo</h1>
+  <div class="card">
+    <h2>Before / After — YOLOv8n (stop sign = ✅)</h2>
+    <img src="comparison_v8.jpg" alt="Original vs YOLOv8n detection">
+  </div>
+  <div class="card">
+    <h2>Annotated result (YOLOv8n)</h2>
+    <img src="runs/detect/predict-4/input.jpg" alt="YOLOv8n annotated">
+  </div>
+  <div class="card">
+    <h2>Model comparison</h2>
+    <table style="border-collapse: collapse; margin: 0 auto; color:#eee;">
+      <tr style="border-bottom:1px solid #333;"><th style="padding:6px 16px;">Model</th><th>Inference</th><th>person</th><th>bus</th><th>stop sign</th></tr>
+      <tr style="border-bottom:1px solid #333;"><td style="padding:6px 16px;color:#4fc3f7;">YOLOv8n</td><td>74.5ms</td><td>4</td><td>1</td><td style="color:#6fe38a;">✅ (0.255)</td></tr>
+      <tr style="border-bottom:1px solid #333;"><td style="padding:6px 16px;color:#4fc3f7;">YOLO12n</td><td>84.6ms</td><td>4</td><td>1</td><td style="color:#ff6b6b;">❌</td></tr>
+      <tr><td style="padding:6px 16px;color:#4fc3f7;">YOLO26n</td><td>68.5ms</td><td>4</td><td>1</td><td style="color:#ff6b6b;">❌</td></tr>
+    </table>
+  </div>
+</body>
+</html>

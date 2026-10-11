@@ -1,0 +1,7 @@
+nohup: ignoring input
+[yolo-server] listening on http://0.0.0.0:12001/
+[yolo-server] streaming sample_video.mp4 at ~12.0 fps
+[yolo-server] loaded yolov8n.pt
+[yolo-server] loaded doclayout.pt
+YOLOv10m-doclayout summary (fused): 465 layers, 19930066 parameters, 37698 gradients
+[yolo-server] layout model failed: 'Conv' object has no attribute 'bn'; using fallback
