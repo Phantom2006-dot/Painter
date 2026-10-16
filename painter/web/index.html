@@ -11,6 +11,14 @@
   <h1>Painter <span>document reconstruction</span></h1>
   <div id="capabilities" class="capabilities">checking capabilities…</div>
 </header>
+<div id="tokenWarning" class="token-warning" hidden>
+  <strong>Access token missing.</strong>
+  This server protects its API, and the page was opened without the token, so every
+  request is refused. Open the link that includes <code>?token=…</code>, or paste the
+  token here and press Use:
+  <input type="password" id="tokenInput" placeholder="access token" autocomplete="off">
+  <button id="useToken" type="button">Use</button>
+</div>
 
 <main>
   <section class="column left">

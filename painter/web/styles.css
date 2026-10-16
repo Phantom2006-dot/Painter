@@ -167,6 +167,12 @@ label.check { flex-direction: row; align-items: center; gap: 8px; }
 .card.settings code { background: rgba(0,0,0,.06); padding: 0 3px; border-radius: 3px; }
 .card.settings .buttons { display: flex; gap: 8px; margin: 10px 0 6px; }
 .card.settings button.ghost { background: transparent; border: 1px solid var(--border, #d0d4da); color: inherit; }
+.token-warning { margin: 0 0 12px; padding: 10px 14px; border-radius: 8px; background: #4a2b12;
+  border: 1px solid #a4682f; color: #ffd9b0; font-size: 13px; line-height: 1.5; }
+.token-warning input { margin: 0 6px; padding: 4px 8px; border-radius: 6px; border: 1px solid #a4682f;
+  background: #2a1a0d; color: inherit; }
+.token-warning button { padding: 4px 12px; border-radius: 6px; border: 1px solid #a4682f;
+  background: #a4682f; color: #1a1008; font-weight: 600; cursor: pointer; }
 .card button.ghost { background: transparent; border: 1px solid var(--border, #d0d4da); color: inherit; cursor: pointer; }
 .card button.ghost.small { font-size: 11px; padding: 1px 6px; margin-left: 8px; opacity: 0.75; }
 .card button.ghost.small:hover { opacity: 1; }

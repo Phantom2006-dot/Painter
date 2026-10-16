@@ -17,19 +17,40 @@ const state = {
 
 const el = (id) => document.getElementById(id);
 
-// When the server sets PAINTER_API_TOKEN, the token travels in the URL fragment
-// (never sent to the server) and is kept in localStorage for later visits. It is
-// also mirrored into a same-origin cookie so <img>/<iframe> requests, which
-// cannot carry an Authorization header, still authenticate.
+// When the server sets PAINTER_API_TOKEN, the token arrives in the URL and is
+// kept in localStorage for later visits. It is also mirrored into a same-origin
+// cookie so <img>/<iframe> requests, which cannot carry an Authorization header,
+// still authenticate.
+//
+// Reading only the fragment was a real defect: every shared link used
+// "?token=...", the query string was ignored, no Authorization header was sent
+// and every call failed with "401: invalid or missing API token" while the page
+// looked perfectly healthy. Both positions are accepted now, and whichever one
+// is used is remembered.
 function authToken() {
   const fromHash = new URLSearchParams(location.hash.replace(/^#/, "")).get("token");
-  if (fromHash) {
-    localStorage.setItem("painterToken", fromHash);
-    history.replaceState(null, "", location.pathname + location.search);
+  const fromQuery = new URLSearchParams(location.search).get("token");
+  const supplied = fromHash || fromQuery;
+  if (supplied) {
+    localStorage.setItem("painterToken", supplied);
+    // Drop the token from the address bar so it is not left in history or
+    // copied around by accident; the stored copy keeps working.
+    const cleaned = new URLSearchParams(location.search);
+    cleaned.delete("token");
+    const query = cleaned.toString();
+    history.replaceState(null, "", location.pathname + (query ? `?${query}` : ""));
   }
-  const token = fromHash || localStorage.getItem("painterToken") || "";
+  const token = supplied || localStorage.getItem("painterToken") || "";
   if (token) document.cookie = `painter_token=${encodeURIComponent(token)}; path=/; SameSite=Strict`;
   return token;
+}
+
+//: Shown when no token is stored, so a blocked app explains itself instead of
+//: reporting a bare 401 that looks like a broken API key.
+function tokenWarning() {
+  if (authToken()) return;
+  const banner = el("tokenWarning");
+  if (banner) banner.hidden = false;
 }
 function authHeaders() {
   const token = authToken();
@@ -83,7 +104,12 @@ async function loadCapabilities() {
     ].join(" &middot; ");
     el("uploadHint").textContent = `max ${caps.max_upload_mb} MB — ${caps.supported_formats.join(", ")}`;
   } catch (error) {
-    el("capabilities").textContent = `capabilities unavailable: ${error.message}`;
+    // A 401 here is the access token, not a broken integration: say so, because
+    // "capabilities unavailable" sent an operator looking in the wrong place.
+    el("capabilities").textContent = /\b401\b/.test(error.message)
+      ? "access token missing or wrong — this page cannot reach the API"
+      : `capabilities unavailable: ${error.message}`;
+    tokenWarning();
   }
 }
 
@@ -517,6 +543,16 @@ async function clearSerpApi() {
 }
 // ---------------------------------------------------------------- wiring
 function wire() {
+  const useToken = el("useToken");
+  if (useToken) {
+    useToken.onclick = () => {
+      const value = el("tokenInput").value.trim();
+      if (!value) return;
+      localStorage.setItem("painterToken", value);
+      location.reload();
+    };
+  }
+  tokenWarning();
   const input = el("file");
   const dropzone = el("dropzone");
   input.onchange = () => uploadFile(input.files[0]);
