@@ -579,7 +579,12 @@ def preprocess_page(
 
     # 2. document boundary + perspective (only for photographs / when a quad is found)
     try:
-        quad = find_document_quad(image)
+        # The trained corner model leads when it is confident; the brightness
+        # heuristic answers otherwise. See painter/page_model.py for why the gate
+        # exists rather than a straight replacement.
+        from .page_model import detect_page_quad
+
+        quad = detect_page_quad(image)
         if quad is not None:
             area = cv2.contourArea(quad.astype("float32"))
             frame_area = float(image.shape[0] * image.shape[1])

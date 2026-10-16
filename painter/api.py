@@ -20,6 +20,21 @@ from typing import Any
 from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+
+class NoCacheStaticFiles(StaticFiles):
+    """Serve the UI without letting a browser pin a stale copy.
+
+    The asset version in index.html is a manual cache-buster, and a browser that
+    kept the previous script is exactly why a fixed bug still reproduced for the
+    operator: the server had the corrected file and the page ran the old one.
+    Revalidating these small files costs nothing and removes that failure mode.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
 from pydantic import BaseModel, Field
 
 from .config import Settings, get_settings, load_settings
@@ -726,11 +741,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # -- frontend ---------------------------------------------------------
     if WEB_DIR.is_dir():
-        app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
+        app.mount("/static", NoCacheStaticFiles(directory=str(WEB_DIR)), name="static")
 
         @app.get("/", response_class=HTMLResponse)
         def index() -> HTMLResponse:
-            return HTMLResponse((WEB_DIR / "index.html").read_text(encoding="utf-8"))
+            # The page carries the asset version that busts the script cache, so a
+            # cached page keeps pointing the browser at an old script. Always
+            # revalidate it.
+            return HTMLResponse(
+                (WEB_DIR / "index.html").read_text(encoding="utf-8"),
+                headers={"Cache-Control": "no-cache, must-revalidate"},
+            )
 
     return app
 

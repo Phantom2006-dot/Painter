@@ -133,3 +133,45 @@ Not yet, on this evidence. The honest conditions:
    pays off on the *specific* documents it fails on — which is why the
    correction export above exists, and why it should be populated before the
    next training run rather than after.
+## Page-corner detector: final measured results
+
+Trained with `tools/train_page_corners.py` on the dataset from
+`tools/build_page_dataset.py`: 2,201 training images, 752 validation images, 675
+documents, splits by document so no page appears in both.
+
+`yolo11n-pose`, 20 epochs, imgsz 384, batch 8, CPU.
+
+| metric | value |
+| --- | --- |
+| box mAP50 | **0.995** |
+| box mAP50-95 | 0.941 |
+| pose mAP50 (corner localisation) | **0.919** |
+| pose mAP50-95 | 0.893 |
+
+Two corrections were needed before these numbers were trustworthy:
+
+1. **123 of 752 validation images were being discarded** as "non-normalized or
+   out of bounds coordinates". Synthetic captures allow the page to run off the
+   frame, which is a real case, but its corners still have to land inside the
+   image. Labels are now clipped into bounds and out-of-frame corners are marked
+   invisible. The full 752 images then evaluate, and the honest figures are the
+   lower ones above (0.919 rather than 0.935) because the hardest captures are no
+   longer thrown away.
+2. Weights are stored at `data/models/page_corners.pt`.
+
+### What the model does and does not do
+
+| input | result |
+| --- | --- |
+| SmartDoc validation frames | confidence 0.95-0.96 |
+| synthetic floor captures (held-out pages) | confidence 0.93, corner error 1.2-3.1% of the diagonal |
+| **the operator's real photograph of the certificate on concrete** | **no detection above 0.067** |
+
+The model has learned "page on a floor" but not the artefacts of a real camera:
+true optics, sensor noise and that photo's particular lighting. On that same
+photograph the brightness heuristic returns a correct quad, so the trained model
+is wired in **behind a confidence gate and the heuristic's page-plausibility
+test**, and defers whenever it is unsure (`painter/page_model.py`).
+
+The next real gain comes from real captures rather than more simulation:
+`painter.cli training-data` already exports corrected documents for retraining.
