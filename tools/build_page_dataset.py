@@ -140,7 +140,15 @@ def load_smartdoc(smartdoc_dir: Path, limit: int, rng: random.Random, stride: in
             continue
         samples.append(
             Sample(
-                sample_id=f"smartdoc_{Path(row['image_path']).stem}_{row['bg_id']}",
+                # The document must be part of the id. SmartDoc names its frames
+                # frame_0078.jpeg under every document, so keying on the frame alone
+                # made 6,700 real captures collapse into 950 files: each document's
+                # frame overwrote the previous one's on disk, and the model was
+                # trained on a sixth of the real data it was supposed to see.
+                sample_id=(
+                    f"smartdoc_{row['model_name']}_{row['bg_id']}_"
+                    f"{Path(row['image_path']).stem}"
+                ),
                 source="smartdoc",
                 document_id=row["model_name"],
                 image_path=image_path,
