@@ -246,22 +246,40 @@ def estimate_typography(
         has_lowercase = any(character.islower() for character in (element.text or ""))
         core_ratio = 0.55 if has_lowercase else 0.73
         em_px = x_height_px / core_ratio
-        family_guess, candidates, family_confidence = estimate_font_family(
-            element.text or "", element.bbox.width, em_px
-        )
+        # Identify the font from the OCR text and the ink. The longest line is used
+        # rather than the whole element: an element's box spans every line it
+        # contains, so matching a multi-line string against that width would compare
+        # the wrong two things.
+        if element.lines:
+            longest = max(element.lines, key=lambda line: len(line.text or ""))
+            sample_text = (longest.text or "").strip() or (element.text or "")
+            sample_width = float(longest.bbox.width or element.bbox.width)
+        else:
+            sample_text = element.text or ""
+            sample_width = float(element.bbox.width)
+        try:
+            from .fontid import identify_font, ink_mask
+
+            identification = identify_font(ink_mask(crop), sample_text, sample_width, em_px)
+            family_guess = identification.family
+            candidates = identification.candidates
+            family_confidence = identification.confidence
+            weight = identification.weight
+            notes.extend(identification.notes)
+            if identification.metric_font:
+                notes.append(
+                    f"rendered with {identification.metric_font}, which is metrically "
+                    f"compatible with {identification.family}"
+                )
+        except Exception as exc:  # font identification must never fail a page
+            logger.warning("font identification failed: %s", exc)
+            family_guess, candidates, family_confidence = None, [], 0.0
         size_pt = round(em_px * 72.0 / dpi, 2)
         # guard rails: nothing below 4pt or above 96pt is plausible
         size_pt = max(4.0, min(96.0, size_pt))
-        stroke_ratio = profile.stroke_width_px / x_height_px if x_height_px else 0.0
-        if stroke_ratio > 0.19:
-            weight = 700
-        elif stroke_ratio > 0.145:
-            weight = 600
-        elif stroke_ratio < 0.075:
-            weight = 300
         italic = abs(profile.slant_deg) > 6.0
         color = profile.ink_color
-        confidence = round(min(0.9, 0.35 + family_confidence * 0.5), 3)
+        confidence = round(min(0.9, 0.30 + family_confidence * 0.55), 3)
         notes.append(
             f"size from the dense ink core ({x_height_px:.1f}px / {core_ratio:.2f} em "
             f"at {dpi:.0f} dpi)"
@@ -370,7 +388,12 @@ def typography_to_css(typography: Typography | None, default_size_pt: float = 11
     size = typography.font_size_pt or default_size_pt
     css["font-size"] = f"{round(size, 2)}pt"
     if typography.font_family:
-        css["font-family"] = f"'{typography.font_family}', 'DejaVu Sans', 'Liberation Sans', sans-serif"
+        from .fontid import css_stack
+
+        # The identified face is named, but the installed metric-compatible
+        # substitute is what the browser actually draws, so widths and line breaks
+        # come out as the original would.
+        css["font-family"] = css_stack(typography.font_family)
     if typography.font_weight:
         css["font-weight"] = str(typography.font_weight)
     if typography.italic:
