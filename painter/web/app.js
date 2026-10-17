@@ -359,11 +359,76 @@ async function startProcessing() {
       body: JSON.stringify(body),
     });
     state.jobId = payload.job_id;
+    // A new job starts a fresh log; keeping the old lines would blur two runs.
+    state.logLastId = 0;
+    state.logStarted = Date.now();
+    state.logLastChange = Date.now();
+    state.logStatus = "queued";
+    if (el("jobLog")) el("jobLog").textContent = "";
     setStatus(el("jobStatus"), `job ${payload.job_id} queued`);
     pollStatus();
   } catch (error) {
     setStatus(el("jobStatus"), error.message, "error");
   }
+}
+
+async function pollLog() {
+  if (!state.jobId) return;
+  const log = el("jobLog");
+  try {
+    const payload = await api(`/api/jobs/${state.jobId}/log?since=${state.logLastId || 0}`);
+    const entries = payload.entries || [];
+    if (entries.length) {
+      // Only append. The server orders by id, so the view can never disagree with it.
+      const atBottom = !log || log.scrollTop + log.clientHeight >= log.scrollHeight - 24;
+      entries.forEach((entry) => {
+        if (!log) return;
+        const line = document.createElement("span");
+        const cls = entry.level === "error" ? "l-error" : entry.level === "warning" ? "l-warn"
+          : /completed in|reused/.test(entry.message) ? "l-done"
+          : /starting/.test(entry.message) ? "l-stage" : "";
+        const time = (entry.created_at || "").slice(11, 19);
+        line.className = cls;
+        line.textContent = `${time}  ${entry.message}\n`;
+        log.appendChild(line);
+      });
+      state.logLastId = payload.last_id;
+      state.logLastChange = Date.now();
+      if (atBottom) log.scrollTop = log.scrollHeight;
+    }
+    updateHeartbeat(payload);
+  } catch (error) {
+    if (el("logHeartbeat")) {
+      el("logHeartbeat").textContent = "log unavailable";
+      el("logHeartbeat").className = "logheartbeat dead";
+    }
+  }
+}
+
+function updateHeartbeat(payload) {
+  const beat = el("logHeartbeat");
+  if (!beat) return;
+  const done = payload.status === "completed" || payload.status === "failed";
+  const sinceChange = Math.round((Date.now() - (state.logLastChange || Date.now())) / 1000);
+  const total = Math.round((Date.now() - (state.logStarted || Date.now())) / 1000);
+  const stage = payload.stage ? ` · ${payload.stage}` : "";
+  const pct = payload.progress != null ? ` · ${Math.round(payload.progress * 100)}%` : "";
+  if (done) {
+    beat.textContent = `${payload.status} · ran ${formatDuration(total)}`;
+    beat.className = "logheartbeat alive";
+    return;
+  }
+  // The number that answers "is it stuck?" is time since the last new line, not
+  // time since the job began.
+  beat.textContent = `${payload.status || "running"}${stage}${pct} · ${formatDuration(total)} · last line ${sinceChange}s ago`;
+  beat.className = `logheartbeat ${sinceChange < 12 ? "alive" : sinceChange < 45 ? "stale" : "dead"}`;
+}
+
+function formatDuration(seconds) {
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
 function pollStatus() {
@@ -383,6 +448,8 @@ function pollStatus() {
         item.innerHTML = `<span>${stage.stage}</span><span>${stage.status}${stage.duration_ms ? ` · ${Math.round(stage.duration_ms)} ms` : ""}</span>`;
         list.appendChild(item);
       });
+      state.logStatus = job.status;
+      await pollLog();
       if (job.error) setStatus(el("jobStatus"), `status: ${job.status} — ${job.error}`, "error");
       if (job.status === "completed" || job.status === "failed") {
         await loadDocument();

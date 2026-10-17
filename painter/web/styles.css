@@ -179,3 +179,46 @@ label.check { flex-direction: row; align-items: center; gap: 8px; }
 #documentList li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .status.ok { color: #15803d; }
 .status.bad { color: #b91c1c; }
+
+/* Live job log. A stage can run for minutes inside one call, so the log is what
+   tells the operator the run is alive rather than hung. */
+.logwrap {
+  margin-top: 0.75rem;
+  border: 1px solid var(--border, #2a3038);
+  border-radius: 8px;
+  background: #0d1117;
+  overflow: hidden;
+}
+.loghead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7d8894;
+  background: #11161d;
+  border-bottom: 1px solid var(--border, #2a3038);
+}
+.logheartbeat { font-variant-numeric: tabular-nums; }
+.logheartbeat.alive { color: #4ade80; }
+.logheartbeat.stale { color: #fbbf24; }
+.logheartbeat.dead { color: #f87171; }
+.joblog {
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  max-height: 15rem;
+  overflow-y: auto;
+  font-family: "DejaVu Sans Mono", "Liberation Mono", monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: #c9d1d9;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.joblog .l-error { color: #f87171; }
+.joblog .l-warn { color: #fbbf24; }
+.joblog .l-stage { color: #60a5fa; }
+.joblog .l-done { color: #4ade80; }
+.joblog .l-time { color: #6b7280; }

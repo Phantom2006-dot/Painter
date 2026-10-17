@@ -22,7 +22,7 @@ from .logging_utils import get_logger
 
 logger = get_logger("storage")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS documents (
@@ -78,6 +78,16 @@ CREATE TABLE IF NOT EXISTS job_stages (
     details_json TEXT DEFAULT '{}',
     PRIMARY KEY (job_id, stage)
 );
+
+CREATE TABLE IF NOT EXISTS job_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id     TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    level      TEXT DEFAULT 'info',
+    stage      TEXT,
+    message    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_job_log_job ON job_log(job_id, id);
 
 CREATE TABLE IF NOT EXISTS ir_versions (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -355,6 +365,10 @@ class Repository:
             "errors",
         ):
             self.execute(f"DELETE FROM {table} WHERE document_id = ?", (document_id,))
+        self.execute(
+            "DELETE FROM job_log WHERE job_id IN (SELECT job_id FROM jobs WHERE document_id = ?)",
+            (document_id,),
+        )
         self.execute("DELETE FROM jobs WHERE document_id = ?", (document_id,))
         self.execute("DELETE FROM documents WHERE document_id = ?", (document_id,))
 
@@ -451,6 +465,30 @@ class Repository:
 
     def get_job_stages(self, job_id: str) -> list[dict[str, Any]]:
         return self.query("SELECT * FROM job_stages WHERE job_id = ? ORDER BY started_at", (job_id,))
+
+    def append_log(
+        self, job_id: str, message: str, level: str = "info", stage: str | None = None
+    ) -> int:
+        """Record one line of the live job log and return its id.
+
+        The log exists because a stage can run for minutes with no visible change:
+        recognising a dense page is one long OCR call, and a progress bar that only
+        moves between stages looks exactly like a hung process.
+        """
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                "INSERT INTO job_log (job_id, created_at, level, stage, message) VALUES (?, ?, ?, ?, ?)",
+                (job_id, utcnow(), level, stage, message),
+            )
+            return int(cursor.lastrowid or 0)
+
+    def get_job_log(self, job_id: str, since_id: int = 0, limit: int = 400) -> list[dict[str, Any]]:
+        """Return log lines newer than ``since_id``, oldest first."""
+        return self.query(
+            "SELECT id, created_at, level, stage, message FROM job_log "
+            "WHERE job_id = ? AND id > ? ORDER BY id LIMIT ?",
+            (job_id, int(since_id), int(limit)),
+        )
 
     def completed_stages(self, job_id: str) -> set[str]:
         rows = self.query(

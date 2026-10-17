@@ -122,6 +122,13 @@ class JobContext:
     ocr_chain: OcrChain | None = None
     detectors: LayoutDetectorService | None = None
 
+    def log(self, message: str, level: str = "info", stage: str | None = None) -> None:
+        """Write one line to this job's live log."""
+        try:
+            self.repository.append_log(self.job_id, message, level=level, stage=stage)
+        except Exception:  # logging must never break a run
+            logger.debug("could not append job log: %s", message)
+
     def warn(self, message: str) -> None:
         if message not in self.warnings:
             self.warnings.append(message)
@@ -273,6 +280,7 @@ class DocumentPipeline:
                 pass  # fall through and re-run; artefacts were removed
 
             stage_started = time.perf_counter()
+            ctx.log(f"stage {stage} starting", stage=stage)
             try:
                 details = self._run_stage(ctx, stage)
             except Exception as exc:  # noqa: BLE001 - recorded, then reported
@@ -290,11 +298,18 @@ class DocumentPipeline:
                     result.elapsed_s = round(time.perf_counter() - started, 2)
                     return result
                 result.stages[stage] = {"status": "failed", "error": str(exc)}
+                ctx.log(f"stage {stage} failed: {type(exc).__name__}: {exc}", level="error", stage=stage)
                 log_event(logger, f"stage {stage} failed", document_id=document_id, stage=stage, error=str(exc))
                 continue
             duration_ms = round((time.perf_counter() - stage_started) * 1000, 2)
             self.repository.record_stage(job_id, stage, "completed", duration_ms, details=details)
             result.stages[stage] = {"status": "completed", "duration_ms": duration_ms, "details": details}
+            _summary = _summarise_details(details)
+            ctx.log(
+                f"stage {stage} completed in {duration_ms / 1000:.1f}s"
+                + (f" \u2014 {_summary}" if _summary else ""),
+                stage=stage,
+            )
             log_event(
                 logger,
                 f"stage {stage} completed",
@@ -551,7 +566,32 @@ class DocumentPipeline:
                     [d for d in page_detections if d.element_type in TEXT_DETECTION_TYPES]
                 )
             ]
-            ocr_results = recognize_regions(chain, image, text_regions) if text_regions else {}
+            if text_regions:
+                ctx.log(
+                    f"page {record['index']}: recognising {len(text_regions)} text region(s) "
+                    f"with {chain.name if chain else 'no provider'}",
+                    stage="recognize",
+                )
+            progress_state = {"last": time.perf_counter()}
+
+            def _ocr_progress(done: int, total_regions: int, _element_id: str) -> None:
+                # Report every 5% and at least every 4 seconds. One dense page is a
+                # single long loop, and without this the UI has nothing to show.
+                now = time.perf_counter()
+                step = max(1, total_regions // 20)
+                if done >= total_regions or done % step == 0 or now - progress_state["last"] > 4.0:
+                    progress_state["last"] = now
+                    ctx.log(
+                        f"page {record['index']}: OCR {done}/{total_regions} regions "
+                        f"({done * 100 // max(1, total_regions)}%)",
+                        stage="recognize",
+                    )
+
+            ocr_results = (
+                recognize_regions(chain, image, text_regions, on_progress=_ocr_progress)
+                if text_regions
+                else {}
+            )
             serialised = {name: result.to_dict() for name, result in ocr_results.items()}
             results[key] = serialised
             for name, result in ocr_results.items():
@@ -938,6 +978,22 @@ def _to_elements(detections: Sequence[Detection]) -> list[Element]:
         except Exception:
             continue
     return elements
+
+
+def _summarise_details(details: Any) -> str:
+    """One readable clause describing what a stage produced."""
+    if not isinstance(details, dict):
+        return ""
+    summary = details.get("summary") if isinstance(details.get("summary"), dict) else {}
+    parts: list[str] = []
+    for key in ("pages", "detections", "elements", "regions", "provider"):
+        value = summary.get(key, details.get(key))
+        if value in (None, "", [], {}):
+            continue
+        if isinstance(value, (list, dict)):
+            value = len(value)
+        parts.append(f"{key}={value}")
+    return ", ".join(parts[:4])
 
 
 def _from_dict(payload: dict[str, Any]) -> Detection:

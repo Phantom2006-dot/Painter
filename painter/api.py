@@ -449,6 +449,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         log_event(logger, "job submitted", document_id=document_id, job_id=job_id)
         return {"job_id": job_id, "document_id": document_id, "status": "queued"}
 
+    @app.get("/api/jobs/{job_id}/log", dependencies=guarded)
+    def job_log(job_id: str, since: int = 0, limit: int = 400) -> dict[str, Any]:
+        """New log lines for a job, so the UI can show what a run is doing.
+
+        Polled with the id of the last line the caller already has, which keeps the
+        response small and makes the client's view exactly the server's ordering.
+        """
+        try:
+            job = repository.get_job(job_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=f"job {job_id} not found") from exc
+        entries = repository.get_job_log(job_id, since_id=since, limit=limit)
+        started = job.get("started_at")
+        elapsed_s = None
+        if started:
+            try:
+                from datetime import datetime, timezone
+
+                elapsed_s = round(
+                    (datetime.now(timezone.utc) - datetime.fromisoformat(str(started))).total_seconds(), 1
+                )
+            except Exception:
+                elapsed_s = None
+        return {
+            "job_id": job_id,
+            "status": job.get("status"),
+            "stage": job.get("stage"),
+            "progress": job.get("progress"),
+            "elapsed_s": elapsed_s,
+            "entries": entries,
+            "last_id": entries[-1]["id"] if entries else int(since),
+        }
+
     @app.get("/api/documents/{document_id}/status", dependencies=guarded)
     def status(document_id: str, job_id: str | None = None) -> dict[str, Any]:
         if job_id:

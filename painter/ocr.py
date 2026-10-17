@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import shutil
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Protocol, Sequence
+from typing import Any, Callable, Iterable, Protocol, Sequence
 
 import numpy as np
 
@@ -381,12 +381,19 @@ def recognize_regions(
     regions: Iterable[tuple[str, BBox]],
     *,
     padding: int = 2,
+    on_progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, OcrResult]:
     """Run OCR for ``(element_id, bbox)`` pairs and return results by id."""
     from .preprocess import crop_box
 
+    region_list = list(regions)
+    total = len(region_list)
     results: dict[str, OcrResult] = {}
-    for element_id, box in regions:
+    for position, (element_id, box) in enumerate(region_list, start=1):
+        # Reported first, so every region is counted exactly once no matter which
+        # path it takes afterwards. This loop is the slowest part of a dense page.
+        if on_progress:
+            on_progress(position, total, element_id)
         crop = crop_box(image, box, padding=padding)
         if crop.shape[0] < 3 or crop.shape[1] < 3:
             results[element_id] = OcrResult(

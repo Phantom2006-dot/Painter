@@ -23,13 +23,19 @@ content differences, capture conditions, layout boxes and text. Splits are made
 by *document*, never by frame, because frames of one document are nearly
 identical and a page-level split would report an accuracy the model does not have.
 
+Samples are written as they are produced and never accumulated. An earlier
+version generated every synthetic photograph up front and held them all in
+memory; at 3,400 captures that is roughly 21 GB, and the process was killed
+part-way through with no output at all. Streaming keeps memory flat regardless of
+how large the dataset is asked to be.
+
 Usage:
     python3 tools/build_page_dataset.py \
         --smartdoc /home/ubuntu/datasets/smartdoc \
         --pages /home/ubuntu/datasets/small_dataset/train/images \
         --background /tmp/qa4/original_small.png \
         --output data/page_dataset \
-        --smartdoc-train 3000 --smartdoc-val 500 --synthetic-train 2000 --synthetic-val 300
+        --smartdoc-train 5500 --smartdoc-val 1200 --synthetic-train 3000 --synthetic-val 400
 """
 from __future__ import annotations
 
@@ -39,14 +45,14 @@ import gzip
 import json
 import random
 import shutil
+import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Iterator
 
 import cv2
 import numpy as np
-
-import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -69,11 +75,13 @@ class Sample:
     sample_id: str
     source: str
     document_id: str
-    image_path: Path
+    image_path: Path | None
     quad: np.ndarray
     metadata: dict = field(default_factory=dict)
     labels: dict = field(default_factory=dict)
     page_path: Path | None = None
+    #: Set for synthetic samples, which exist only in memory until written.
+    photo: np.ndarray | None = None
 
 
 def _clip_quad(quad: np.ndarray, width: int, height: int) -> np.ndarray:
@@ -99,7 +107,11 @@ def _quad_is_usable(quad: np.ndarray, width: int, height: int, min_area_fraction
 
 
 def load_smartdoc(smartdoc_dir: Path, limit: int, rng: random.Random, stride: int = 1) -> list[Sample]:
-    """Load real frames with their corner ground truth."""
+    """Load real frames with their corner ground truth.
+
+    Only the path is held, so this can cover tens of thousands of frames without
+    the memory cost that the synthetic path has to avoid.
+    """
     frames_dir = smartdoc_dir / "frames"
     metadata_path = frames_dir / "metadata.csv.gz"
     if not metadata_path.is_file():
@@ -107,8 +119,7 @@ def load_smartdoc(smartdoc_dir: Path, limit: int, rng: random.Random, stride: in
 
     samples: list[Sample] = []
     with gzip.open(metadata_path, "rt", newline="") as handle:
-        reader = csv.DictReader(handle)
-        rows = list(reader)
+        rows = list(csv.DictReader(handle))
 
     rng.shuffle(rows)
     for index, row in enumerate(rows):
@@ -119,8 +130,6 @@ def load_smartdoc(smartdoc_dir: Path, limit: int, rng: random.Random, stride: in
         image_path = frames_dir / row["image_path"]
         if not image_path.is_file():
             continue
-        width = float(row["model_width"])
-        height = float(row["model_height"])
         quad = np.array(
             [[float(row[f"{corner}_x"]), float(row[f"{corner}_y"])] for corner in SMARTDOC_CORNER_COLUMNS]
         )
@@ -150,17 +159,22 @@ def load_smartdoc(smartdoc_dir: Path, limit: int, rng: random.Random, stride: in
     return samples
 
 
-def load_synthetic(
+def synthetic_samples(
     page_paths: list[Path],
     backgrounds: list[np.ndarray],
     count: int,
     rng: np.random.Generator,
     frame_size: tuple[int, int] = (1240, 1650),
-) -> list[Sample]:
-    """Composite clean pages onto real surfaces with exact labels."""
-    samples: list[Sample] = []
+    start_index: int = 0,
+) -> Iterator[Sample]:
+    """Yield synthetic captures one at a time so none are buffered.
+
+    This is a generator for a specific reason: each capture is a full-resolution
+    photograph, and a caller that collected them all before writing would need tens
+    of gigabytes.
+    """
     width, height = frame_size
-    for index in range(count):
+    for index in range(start_index, start_index + count):
         page_path = page_paths[int(rng.integers(0, len(page_paths)))]
         page = cv2.imread(str(page_path))
         if page is None:
@@ -175,29 +189,26 @@ def load_synthetic(
 
         capture = simulate_capture(page, background, rng)
         photo = capture.photo
-        samples.append(
-            Sample(
-                sample_id=f"synthetic_{index:06d}",
-                source="synthetic",
-                # The clean page is the document identity, so a page never spans splits.
-                document_id=f"synthetic_page_{page_path.stem[:16]}",
-                image_path=None,  # written by the caller
-                quad=capture.page_quad.astype(np.float64),
-                metadata={
-                    "frame_size": [photo.shape[1], photo.shape[0]],
-                    "corner_source": "simulated transformation",
-                    "page_size": list(capture.page_size),
-                    "capture": capture.params.as_dict(),
-                },
-                labels={
-                    "capture": capture.params.distortion_labels(),
-                    "content": {"same_text": "identical to the paired clean page"},
-                },
-                page_path=page_path,
-            )
+        yield Sample(
+            sample_id=f"synthetic_{index:06d}",
+            source="synthetic",
+            # The clean page is the document identity, so a page never spans splits.
+            document_id=f"synthetic_page_{page_path.stem[:16]}",
+            image_path=None,
+            quad=capture.page_quad.astype(np.float64),
+            metadata={
+                "frame_size": [photo.shape[1], photo.shape[0]],
+                "corner_source": "simulated transformation",
+                "page_size": list(capture.page_size),
+                "capture": capture.params.as_dict(),
+            },
+            labels={
+                "capture": capture.params.distortion_labels(),
+                "content": {"same_text": "identical to the paired clean page"},
+            },
+            page_path=page_path,
+            photo=photo,
         )
-        samples[-1]._photo = photo  # type: ignore[attr-defined]
-    return samples
 
 
 def load_docunet(docunet_dir: Path, limit: int | None = None) -> list[Sample]:
@@ -207,6 +218,10 @@ def load_docunet(docunet_dir: Path, limit: int | None = None) -> list[Sample]:
     ``10_2.jpg`` are two captures of the document whose scan is ``10.jpg``. Two
     photographs of one document are not two documents, so they share a
     ``document_id`` and can never be split across train and validation.
+
+    These are recorded in the manifest only. Their page corners are not annotated
+    in this release, and deriving them by matching the photograph to the scan
+    worked for 2 of 84 photographs, which is not a foundation to train on.
     """
     photos_dir = docunet_dir / "original" / "original"
     scans_dir = docunet_dir / "scan" / "scan"
@@ -228,7 +243,7 @@ def load_docunet(docunet_dir: Path, limit: int | None = None) -> list[Sample]:
                 source="docunet",
                 document_id=f"docunet_{document_id}",
                 image_path=photo_path,
-                quad=np.zeros((4, 2), dtype=np.float64),  # not annotated in this release
+                quad=np.zeros((4, 2), dtype=np.float64),
                 metadata={"corner_source": "not annotated", "scan": str(scan_path)},
                 labels={"capture": [], "content": {"same_text": "paired with the flatbed scan"}},
                 page_path=scan_path,
@@ -258,6 +273,39 @@ def write_pose_label(sample: Sample, label_path: Path, width: int, height: int) 
     label_path.write_text(" ".join(parts) + "\n")
 
 
+def write_sample(output: Path, split: str, sample: Sample, manifest: Any, counts: Counter) -> bool:
+    """Write one sample's image, label and manifest line, then release it."""
+    photo = sample.photo
+    if photo is None and sample.image_path is not None:
+        photo = cv2.imread(str(sample.image_path))
+    if photo is None:
+        return False
+    height, width = photo.shape[:2]
+    image_path = output / "images" / split / f"{sample.sample_id}.jpg"
+    cv2.imwrite(str(image_path), photo, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+    write_pose_label(sample, output / "labels" / split / f"{sample.sample_id}.txt", width, height)
+    manifest.write(
+        json.dumps(
+            {
+                "sample_id": sample.sample_id,
+                "split": split,
+                "source": sample.source,
+                "document_id": sample.document_id,
+                "image": str(image_path.relative_to(output)),
+                "page_quad": [[round(float(x), 2), round(float(y), 2)] for x, y in sample.quad],
+                "page_reference": str(sample.page_path) if sample.page_path else None,
+                "metadata": sample.metadata,
+                "labels": sample.labels,
+            }
+        )
+        + "\n"
+    )
+    counts[f"{split}/{sample.source}"] += 1
+    # Drop the reference immediately: this is the line that keeps memory flat.
+    sample.photo = None
+    return True
+
+
 def build(args: argparse.Namespace) -> None:
     rng_py = random.Random(args.seed)
     rng_np = np.random.default_rng(args.seed)
@@ -278,30 +326,59 @@ def build(args: argparse.Namespace) -> None:
     if not backgrounds:
         raise SystemExit("no usable background textures; pass --background")
 
-    train: list[Sample] = []
-    val: list[Sample] = []
+    counts: Counter[str] = Counter()
+    manifest_path = output / "manifest.jsonl"
+    with manifest_path.open("w") as manifest:
+        if args.smartdoc:
+            smartdoc_dir = Path(args.smartdoc)
+            pool = load_smartdoc(
+                smartdoc_dir, args.smartdoc_train + args.smartdoc_val, rng_py
+            )
+            train_n = val_n = 0
+            for sample in pool:
+                split = "val" if sample.document_id in SMARTDOC_VAL_MODELS else "train"
+                if write_sample(output, split, sample, manifest, counts):
+                    if split == "val":
+                        val_n += 1
+                    else:
+                        train_n += 1
+            print(
+                f"smartdoc: {train_n} train, {val_n} val "
+                f"(held-out models: {', '.join(SMARTDOC_VAL_MODELS)})"
+            )
 
-    if args.smartdoc:
-        smartdoc_dir = Path(args.smartdoc)
-        pool = load_smartdoc(smartdoc_dir, args.smartdoc_train + args.smartdoc_val, rng_py)
-        for sample in pool:
-            (val if sample.document_id in SMARTDOC_VAL_MODELS else train).append(sample)
-        print(f"smartdoc: {len(train)} train, {len(val)} val (held-out models: {', '.join(SMARTDOC_VAL_MODELS)})")
+        if args.synthetic_train or args.synthetic_val:
+            if not pages:
+                raise SystemExit("--pages is required for synthetic samples")
+            # Hold out whole pages, not individual captures of one page. Chosen from
+            # the page list rather than from generated samples, because the samples
+            # are never all in memory at once.
+            # Every twelfth page is held out, which puts roughly 8% of the captures
+            # in validation and keeps whole pages on one side of the split.
+            val_pages = {page.stem[:16] for page in pages[::12]}
 
-    if args.synthetic_train or args.synthetic_val:
-        if not pages:
-            raise SystemExit("--pages is required for synthetic samples")
-        synthetic_val_docs = set()
-        synthetic = load_synthetic(
-            pages, backgrounds, args.synthetic_train + args.synthetic_val, rng_np
-        )
-        # Hold out whole pages, not individual captures of one page.
-        for sample in sorted({s.document_id for s in synthetic})[: max(1, len(synthetic) // 12)]:
-            synthetic_val_docs.add(sample)
-        for sample in synthetic:
-            (val if sample.document_id in synthetic_val_docs else train).append(sample)
-        print(f"synthetic: {sum(1 for s in train if s.source == 'synthetic')} train, "
-              f"{sum(1 for s in val if s.source == 'synthetic')} val")
+            train_n = val_n = 0
+            for sample in synthetic_samples(
+                pages, backgrounds, args.synthetic_train, rng_np, start_index=0
+            ):
+                split = "val" if sample.document_id in {f"synthetic_page_{p}" for p in val_pages} else "train"
+                if write_sample(output, split, sample, manifest, counts):
+                    if split == "val":
+                        val_n += 1
+                    else:
+                        train_n += 1
+            for sample in synthetic_samples(
+                pages, backgrounds, args.synthetic_val, rng_np, start_index=args.synthetic_train
+            ):
+                # The held-out captures are a separate pass so the requested count is
+                # honoured exactly, whatever the page-level split turned out to be.
+                split = "val" if sample.document_id in {f"synthetic_page_{p}" for p in val_pages} else "train"
+                if write_sample(output, split, sample, manifest, counts):
+                    if split == "val":
+                        val_n += 1
+                    else:
+                        train_n += 1
+            print(f"synthetic: {train_n} train, {val_n} val (held-out pages: {len(val_pages)})")
 
     if args.docunet:
         # Paired photo/scan records are for the reconstruction side, not for
@@ -323,39 +400,6 @@ def build(args: argparse.Namespace) -> None:
             )
         )
         print(f"docunet: {len(docunet)} photo/scan pairs recorded in {manifest_extra.name}")
-
-    manifest_path = output / "manifest.jsonl"
-    counts: Counter[str] = Counter()
-    with manifest_path.open("w") as manifest:
-        for split, samples in (("train", train), ("val", val)):
-            for index, sample in enumerate(samples):
-                photo = getattr(sample, "_photo", None)
-                if photo is None:
-                    photo = cv2.imread(str(sample.image_path))
-                if photo is None:
-                    continue
-                height, width = photo.shape[:2]
-                image_name = f"{sample.sample_id}.jpg"
-                image_path = output / "images" / split / image_name
-                cv2.imwrite(str(image_path), photo, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
-                write_pose_label(sample, output / "labels" / split / f"{sample.sample_id}.txt", width, height)
-                manifest.write(
-                    json.dumps(
-                        {
-                            "sample_id": sample.sample_id,
-                            "split": split,
-                            "source": sample.source,
-                            "document_id": sample.document_id,
-                            "image": str(image_path.relative_to(output)),
-                            "page_quad": [[round(float(x), 2), round(float(y), 2)] for x, y in sample.quad],
-                            "page_reference": str(sample.page_path) if sample.page_path else None,
-                            "metadata": sample.metadata,
-                            "labels": sample.labels,
-                        }
-                    )
-                    + "\n"
-                )
-                counts[f"{split}/{sample.source}"] += 1
 
     (output / "data.yaml").write_text(
         "\n".join(
